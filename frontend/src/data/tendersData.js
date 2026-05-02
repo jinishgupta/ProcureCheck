@@ -1,0 +1,55 @@
+// Mock data for multiple tenders
+
+export const tendersList = [
+  {
+    id: 'CRPF-2026-IT-0042',
+    title: 'Supply of Ballistic Helmets (BIS IS 17051:2018)',
+    department: 'Central Reserve Police Force',
+    issueDate: '2026-03-15',
+    closingDate: '2026-04-30',
+    estimatedValue: '₹12.8 Cr',
+    status: 'evaluation_complete',
+    totalPages: 287,
+    extractedCriteria: 24,
+    biddersCount: 4,
+    pendingReviews: 5,
+    lastActivity: '2 min ago',
+  },
+  {
+    id: 'BSF-2026-EQ-0128',
+    title: 'Procurement of Night Vision Devices (Gen 3)',
+    department: 'Border Security Force',
+    issueDate: '2026-02-20',
+    closingDate: '2026-04-15',
+    estimatedValue: '₹45.2 Cr',
+    status: 'awaiting_bids',
+    totalPages: 412,
+    extractedCriteria: 31,
+    biddersCount: 0,
+    pendingReviews: 0,
+    lastActivity: '3 days ago',
+  },
+  {
+    id: 'CISF-2026-VH-0089',
+    title: 'Supply of Armoured Personnel Carriers',
+    department: 'Central Industrial Security Force',
+    issueDate: '2026-01-10',
+    closingDate: '2026-03-25',
+    estimatedValue: '₹128.5 Cr',
+    status: 'completed',
+    totalPages: 523,
+    extractedCriteria: 42,
+    biddersCount: 7,
+    pendingReviews: 0,
+    lastActivity: '2 weeks ago',
+  },
+]
+
+export const statusConfig = {
+  draft: { label: 'Draft', color: 'text-noir-400 bg-noir-800/40 border-noir-700' },
+  criteria_extracted: { label: 'Criteria Extracted', color: 'text-amber-400 bg-amber-900/20 border-amber-700/30' },
+  awaiting_bids: { label: 'Awaiting Bids', color: 'text-jade-400 bg-jade-900/20 border-jade-700/30' },
+  evaluation_in_progress: { label: 'Evaluation In Progress', color: 'text-amber-400 bg-amber-900/20 border-amber-700/30' },
+  evaluation_complete: { label: 'Evaluation Complete', color: 'text-jade-400 bg-jade-900/20 border-jade-700/30' },
+  completed: { label: 'Completed', color: 'text-noir-300 bg-noir-800/40 border-noir-700' },
+}
