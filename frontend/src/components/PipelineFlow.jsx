@@ -35,7 +35,7 @@ const stages = [
     icon: <CheckCircle className="w-5 h-5" />,
     details: [
       'Type-specific top-3 page retrieval',
-      'Regex-first extraction (≥0.90 skips LLM)',
+      'Regex-first extraction',
       '4-signal confidence composition',
       'PASS / FAIL / REVIEW verdicts',
       'Cross-document validation checks',

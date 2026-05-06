@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.config import settings
-from app.routes import tenders, criteria, bidders, evaluations
+from db.config import settings
+from tender.routes import tender_router, criteria_router
+from bidder.routes import router as bidder_router
+from matching.routes import router as matching_router
 
 # Create FastAPI app
 app = FastAPI(
@@ -20,10 +22,10 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(tenders.router, prefix="/api")
-app.include_router(criteria.router, prefix="/api")
-app.include_router(bidders.router, prefix="/api")
-app.include_router(evaluations.router, prefix="/api")
+app.include_router(tender_router, prefix="/api")
+app.include_router(criteria_router, prefix="/api")
+app.include_router(bidder_router, prefix="/api")
+app.include_router(matching_router, prefix="/api")
 
 
 @app.get("/")

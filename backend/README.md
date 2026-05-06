@@ -1,11 +1,12 @@
 # ProcureCheck Backend API
 
-FastAPI backend with Supabase database for the AI-Based Tender Evaluation Platform.
+FastAPI backend with PostgreSQL (Supabase) database for the AI-Based Tender Evaluation Platform.
 
 ## Tech Stack
 
 - **FastAPI** - Modern Python web framework
-- **Supabase** - PostgreSQL database with real-time capabilities
+- **PostgreSQL** - Relational database (via Supabase)
+- **psycopg2** - PostgreSQL adapter for Python
 - **Pydantic** - Data validation and settings management
 - **Uvicorn** - ASGI server
 
@@ -23,8 +24,8 @@ pip install -r requirements.txt
 ### 2. Configure Supabase
 
 1. Create a Supabase project at https://supabase.com
-2. Go to Project Settings > API
-3. Copy your project URL and anon key
+2. Go to Project Settings > Database
+3. Copy your connection string (it will look like: `postgresql://postgres:[YOUR-PASSWORD]@db.xxxxx.supabase.co:5432/postgres`)
 4. Run the SQL schema in the Supabase SQL Editor:
    ```bash
    # Copy contents of supabase_schema.sql and run in Supabase SQL Editor
@@ -38,11 +39,10 @@ Create a `.env` file in the backend directory:
 cp .env.example .env
 ```
 
-Edit `.env` and add your Supabase credentials:
+Edit `.env` and add your database URL:
 
 ```env
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your-anon-key
+DATABASE_URL=postgresql://postgres:your_password@db.xxxxx.supabase.co:5432/postgres
 API_HOST=0.0.0.0
 API_PORT=8000
 CORS_ORIGINS=http://localhost:5173,http://localhost:5174

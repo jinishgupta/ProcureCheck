@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { ArrowLeft, Upload, FileText, CheckCircle2 } from 'lucide-react'
+import { ArrowLeft, Upload, FileText, CheckCircle2, AlertCircle } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import FileUpload from '../components/FileUpload'
+import { createTender, uploadTenderPDF } from '../api'
 
 const pageVariants = {
   initial: { opacity: 0, y: 12 },
@@ -22,17 +23,36 @@ export default function NewTender() {
   })
   const [files, setFiles] = useState([])
   const [isProcessing, setIsProcessing] = useState(false)
+  const [pipelineStep, setPipelineStep] = useState(0) // 0=idle, 1=creating, 2=uploading, 3=done
+  const [error, setError] = useState(null)
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     setIsProcessing(true)
-    
-    // Simulate processing
-    setTimeout(() => {
-      // In real app, this would upload and process the tender
-      // For now, redirect to the first tender
-      navigate('/tender/CRPF-2026-IT-0042')
-    }, 2000)
+    setError(null)
+    setPipelineStep(1)
+
+    try {
+      // Step 1: Create tender record
+      const tender = await createTender(formData)
+      const tenderId = tender.id
+
+      // Step 2: Upload PDF and run pipeline
+      setPipelineStep(2)
+      const pdfFile = files[0]
+      await uploadTenderPDF(tenderId, pdfFile)
+
+      // Step 3: Done — redirect
+      setPipelineStep(3)
+      setTimeout(() => {
+        navigate(`/tender/${tenderId}`)
+      }, 1000)
+    } catch (err) {
+      console.error('Pipeline error:', err)
+      setError(err.message || 'An error occurred during processing')
+      setIsProcessing(false)
+      setPipelineStep(0)
+    }
   }
 
   const handleChange = (e) => {
@@ -41,6 +61,12 @@ export default function NewTender() {
       [e.target.name]: e.target.value
     })
   }
+
+  const processingSteps = [
+    { label: 'Creating tender record', status: pipelineStep >= 1 ? (pipelineStep > 1 ? 'done' : 'active') : 'pending' },
+    { label: 'Uploading & extracting criteria', detail: 'Heading detection → LLM extraction → Dedup', status: pipelineStep >= 2 ? (pipelineStep > 2 ? 'done' : 'active') : 'pending' },
+    { label: 'Pipeline complete', status: pipelineStep >= 3 ? 'done' : 'pending' },
+  ]
 
   return (
     <motion.div 
@@ -70,6 +96,21 @@ export default function NewTender() {
         </p>
       </div>
 
+      {/* Error message */}
+      {error && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="border border-crimson-700/30 bg-crimson-900/10 p-4 mb-6 flex items-start gap-3"
+        >
+          <AlertCircle className="w-5 h-5 text-crimson-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-mono text-crimson-400 mb-1">Error</p>
+            <p className="text-sm text-noir-300 font-newsreader">{error}</p>
+          </div>
+        </motion.div>
+      )}
+
       <form onSubmit={handleSubmit} className="space-y-8">
         {/* Tender Details */}
         <div className="border border-noir-800 bg-noir-900/60 p-6">
@@ -86,7 +127,8 @@ export default function NewTender() {
                 value={formData.title}
                 onChange={handleChange}
                 required
-                className="w-full bg-noir-850 border border-noir-700 px-4 py-3 text-noir-100 font-newsreader focus:outline-none focus:border-amber-500 transition-colors"
+                disabled={isProcessing}
+                className="w-full bg-noir-850 border border-noir-700 px-4 py-3 text-noir-100 font-newsreader focus:outline-none focus:border-amber-500 transition-colors disabled:opacity-50"
                 placeholder="e.g., Supply of Ballistic Helmets"
               />
             </div>
@@ -101,7 +143,8 @@ export default function NewTender() {
                 value={formData.department}
                 onChange={handleChange}
                 required
-                className="w-full bg-noir-850 border border-noir-700 px-4 py-3 text-noir-100 font-newsreader focus:outline-none focus:border-amber-500 transition-colors"
+                disabled={isProcessing}
+                className="w-full bg-noir-850 border border-noir-700 px-4 py-3 text-noir-100 font-newsreader focus:outline-none focus:border-amber-500 transition-colors disabled:opacity-50"
                 placeholder="e.g., Central Reserve Police Force"
               />
             </div>
@@ -116,7 +159,8 @@ export default function NewTender() {
                   name="estimatedValue"
                   value={formData.estimatedValue}
                   onChange={handleChange}
-                  className="w-full bg-noir-850 border border-noir-700 px-4 py-3 text-noir-100 font-newsreader focus:outline-none focus:border-amber-500 transition-colors"
+                  disabled={isProcessing}
+                  className="w-full bg-noir-850 border border-noir-700 px-4 py-3 text-noir-100 font-newsreader focus:outline-none focus:border-amber-500 transition-colors disabled:opacity-50"
                   placeholder="e.g., ₹12.8 Cr"
                 />
               </div>
@@ -130,7 +174,8 @@ export default function NewTender() {
                   name="issueDate"
                   value={formData.issueDate}
                   onChange={handleChange}
-                  className="w-full bg-noir-850 border border-noir-700 px-4 py-3 text-noir-100 font-mono focus:outline-none focus:border-amber-500 transition-colors"
+                  disabled={isProcessing}
+                  className="w-full bg-noir-850 border border-noir-700 px-4 py-3 text-noir-100 font-mono focus:outline-none focus:border-amber-500 transition-colors disabled:opacity-50"
                 />
               </div>
             </div>
@@ -144,7 +189,8 @@ export default function NewTender() {
                 name="closingDate"
                 value={formData.closingDate}
                 onChange={handleChange}
-                className="w-full bg-noir-850 border border-noir-700 px-4 py-3 text-noir-100 font-mono focus:outline-none focus:border-amber-500 transition-colors"
+                disabled={isProcessing}
+                className="w-full bg-noir-850 border border-noir-700 px-4 py-3 text-noir-100 font-mono focus:outline-none focus:border-amber-500 transition-colors disabled:opacity-50"
               />
             </div>
           </div>
@@ -175,19 +221,27 @@ export default function NewTender() {
               <span className="text-sm font-mono text-amber-400">Processing tender document...</span>
             </div>
             <div className="space-y-2 text-xs text-noir-400 font-mono">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-3 h-3 text-jade-500" />
-                <span>Classifying pages (native vs scanned)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-3 h-3 text-jade-500" />
-                <span>Running OCR on scanned pages</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 border border-amber-500 rounded-full animate-pulse" />
-                <span>Extracting eligibility criteria...</span>
-              </div>
+              {processingSteps.map((step, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  {step.status === 'done' ? (
+                    <CheckCircle2 className="w-3 h-3 text-jade-500" />
+                  ) : step.status === 'active' ? (
+                    <div className="w-3 h-3 border border-amber-500 rounded-full animate-pulse" />
+                  ) : (
+                    <div className="w-3 h-3 border border-noir-600 rounded-full" />
+                  )}
+                  <span>{step.label}</span>
+                  {step.detail && step.status === 'active' && (
+                    <span className="text-noir-500 ml-1">— {step.detail}</span>
+                  )}
+                </div>
+              ))}
             </div>
+            {pipelineStep === 2 && (
+              <p className="text-xs text-noir-500 font-mono mt-4">
+                This may take a few minutes depending on the document size...
+              </p>
+            )}
           </motion.div>
         )}
 
