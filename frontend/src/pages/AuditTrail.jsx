@@ -1,36 +1,71 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Shield, Download, Search, Hash, User, Clock, FileText } from 'lucide-react'
-import { auditLogs } from '../data/mockData'
+import { Shield, Download, Search, Hash, User, Clock, FileText, Loader2 } from 'lucide-react'
+import { getAuditTrail } from '../api'
 
 const actionColors = {
-  TENDER_UPLOADED: 'text-jade-400',
-  OCR_COMPLETED: 'text-jade-400',
-  CRITERIA_EXTRACTED: 'text-jade-400',
-  CORRIGENDUM_APPLIED: 'text-amber-400',
-  BIDDER_UPLOADED: 'text-noir-300',
-  EVALUATION_STARTED: 'text-amber-500',
-  EVALUATION_COMPLETE: 'text-jade-400',
-  REVIEW_CONFIRMED: 'text-crimson-400',
-  REVIEW_OVERRIDE: 'text-amber-400',
-  REPORT_EXPORTED: 'text-noir-200',
+  TENDER_CREATED: 'text-jade-400 bg-jade-900/20 border-jade-700/30',
+  TENDER_UPLOADED: 'text-amber-400 bg-amber-900/20 border-amber-700/30',
+  BIDDER_UPLOADED: 'text-amber-400 bg-amber-900/20 border-amber-700/30',
+  EVALUATION_COMPLETE: 'text-jade-400 bg-jade-900/20 border-jade-700/30',
+  REVIEW_CONFIRMED: 'text-jade-400 bg-jade-900/20 border-jade-700/30',
+  REVIEW_OVERRIDE: 'text-crimson-400 bg-crimson-900/20 border-crimson-700/30',
 }
 
 export default function AuditTrail({ tenderId }) {
-  const [searchQuery, setSearchQuery] = useState('')
-  const [filterAction, setFilterAction] = useState('all')
+  const [logs, setLogs] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [searchTerm, setSearchTerm] = useState('')
 
-  const actions = ['all', ...new Set(auditLogs.map((l) => l.action))]
+  const fetchAuditTrail = async () => {
+    setLoading(true)
+    try {
+      const data = await getAuditTrail(tenderId)
+      setLogs(data.logs || [])
+    } catch (error) {
+      console.error('Error fetching audit trail:', error)
+      setLogs([])
+    } finally {
+      setLoading(false)
+    }
+  }
 
-  const filtered = auditLogs.filter((log) => {
-    const matchesSearch = searchQuery === '' || log.detail.toLowerCase().includes(searchQuery.toLowerCase()) || log.officer.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesAction = filterAction === 'all' || log.action === filterAction
-    return matchesSearch && matchesAction
-  })
+  useEffect(() => {
+    if (tenderId) {
+      fetchAuditTrail()
+    }
+  }, [tenderId])
+
+  const filteredLogs = logs.filter(log =>
+    log.action.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    log.officer.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    log.detail.toLowerCase().includes(searchTerm.toLowerCase())
+  )
+
+  const handleExport = () => {
+    const csvContent = [
+      ['Timestamp', 'Action', 'Officer', 'Detail', 'Version', 'Doc Hash'].join(','),
+      ...filteredLogs.map(log => [
+        new Date(log.timestamp).toISOString(),
+        log.action,
+        log.officer,
+        `"${log.detail.replace(/"/g, '""')}"`,
+        log.version,
+        log.doc_hash || ''
+      ].join(','))
+    ].join('\n')
+
+    const blob = new Blob([csvContent], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `audit_trail_${tenderId}_${new Date().toISOString().split('T')[0]}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
   return (
     <div>
-
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
         <div>
@@ -39,104 +74,126 @@ export default function AuditTrail({ tenderId }) {
             Audit Trail
           </h2>
           <p className="text-noir-400 font-newsreader">
-            Immutable log of every system and officer action.
+            Immutable log of all actions — timestamped, hashed, and officer-attributed.
           </p>
         </div>
 
-        <button className="flex items-center gap-2 px-5 py-2.5 bg-amber-500 text-noir-950 text-xs font-mono font-semibold hover:bg-amber-400 transition-colors self-start">
-          <Download className="w-3.5 h-3.5" />
-          EXPORT PDF REPORT
+        <button
+          onClick={handleExport}
+          disabled={filteredLogs.length === 0}
+          className="flex items-center gap-2 px-4 py-2 border border-amber-500/50 bg-amber-500/10 text-amber-500 text-xs font-mono hover:bg-amber-500/20 transition-colors disabled:opacity-50"
+        >
+          <Download className="w-4 h-4" />
+          EXPORT CSV
         </button>
       </div>
 
-      {/* Search & filter */}
-      <div className="flex flex-col sm:flex-row gap-3 mb-6">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-noir-500" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search logs..."
-            className="w-full bg-noir-900 border border-noir-800 pl-10 pr-4 py-2.5 text-sm text-noir-200 font-mono placeholder:text-noir-600 focus:outline-none focus:border-noir-600 transition-colors"
-          />
+      {/* Search */}
+      <div className="mb-6 relative">
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-noir-500" />
+        <input
+          type="text"
+          placeholder="Search by action, officer, or detail..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="w-full bg-noir-850 border border-noir-700 pl-11 pr-4 py-3 text-noir-100 font-mono text-sm focus:outline-none focus:border-amber-500 transition-colors"
+        />
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <div className="border border-noir-800 bg-noir-900/40 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <FileText className="w-4 h-4 text-noir-400" />
+            <span className="text-xs font-mono text-noir-400">TOTAL ENTRIES</span>
+          </div>
+          <div className="text-2xl font-syne font-bold text-noir-200">{logs.length}</div>
         </div>
-        <select
-          value={filterAction}
-          onChange={(e) => setFilterAction(e.target.value)}
-          className="bg-noir-900 border border-noir-800 px-4 py-2.5 text-sm text-noir-200 font-mono focus:outline-none focus:border-noir-600 transition-colors appearance-none cursor-pointer"
-        >
-          {actions.map((a) => (
-            <option key={a} value={a} className="bg-noir-900">
-              {a === 'all' ? 'ALL ACTIONS' : a}
-            </option>
-          ))}
-        </select>
+        <div className="border border-noir-800 bg-noir-900/40 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <User className="w-4 h-4 text-noir-400" />
+            <span className="text-xs font-mono text-noir-400">UNIQUE OFFICERS</span>
+          </div>
+          <div className="text-2xl font-syne font-bold text-noir-200">
+            {new Set(logs.map(l => l.officer)).size}
+          </div>
+        </div>
+        <div className="border border-noir-800 bg-noir-900/40 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Shield className="w-4 h-4 text-noir-400" />
+            <span className="text-xs font-mono text-noir-400">INTEGRITY</span>
+          </div>
+          <div className="text-2xl font-syne font-bold text-jade-400">VERIFIED</div>
+        </div>
       </div>
 
-      {/* Integrity banner */}
-      <div className="flex items-center gap-4 mb-8 p-5 border border-jade-700/30 bg-jade-900/10">
-        <Shield className="w-5 h-5 text-jade-500" />
-        <span className="text-base text-noir-200 font-newsreader">
-          All entries are immutable. SHA-256 document fingerprints ensure tamper detection.
-        </span>
-      </div>
-
-      {/* Log entries */}
-      <div className="border border-noir-800 bg-noir-900/30">
-        <div className="divide-y divide-noir-800/50">
-          {filtered.map((log, i) => (
-            <motion.div
-              key={log.id}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: i * 0.03 }}
-              className="p-4 hover:bg-noir-800/20 transition-colors"
-            >
-              <div className="flex flex-col md:flex-row md:items-start gap-3">
-                {/* Timestamp */}
-                <div className="flex items-center gap-2 shrink-0 w-44">
-                  <Clock className="w-3.5 h-3.5 text-noir-600" />
-                  <span className="text-xs font-mono text-noir-400">{log.timestamp}</span>
-                </div>
-
-                {/* Action badge */}
-                <div className="shrink-0">
-                  <span className={`text-xs font-mono px-2 py-0.5 border border-noir-700 ${actionColors[log.action] || 'text-noir-300'}`}>
-                    {log.action}
-                  </span>
-                </div>
-
-                {/* Detail */}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-noir-200 font-newsreader mb-1">{log.detail}</p>
-                  <div className="flex flex-wrap items-center gap-4">
-                    <div className="flex items-center gap-1.5">
-                      <User className="w-3 h-3 text-noir-600" />
-                      <span className="text-xs font-mono text-noir-500">{log.officer}</span>
-                    </div>
-                    {log.docHash && (
-                      <div className="flex items-center gap-1.5">
-                        <Hash className="w-3 h-3 text-noir-600" />
-                        <span className="text-xs font-mono text-noir-500">{log.docHash}</span>
+      {/* Audit Logs */}
+      {loading ? (
+        <div className="flex items-center justify-center p-12 border border-noir-800 bg-noir-900/30">
+          <Loader2 className="w-8 h-8 text-amber-500 animate-spin" />
+        </div>
+      ) : filteredLogs.length === 0 ? (
+        <div className="text-center py-16 border border-noir-800 bg-noir-900/40">
+          <Shield className="w-12 h-12 text-noir-600 mx-auto mb-4" />
+          <p className="text-noir-400 font-newsreader">
+            {searchTerm ? 'No logs match your search.' : 'No audit logs available.'}
+          </p>
+        </div>
+      ) : (
+        <div className="border border-noir-800 bg-noir-900/30">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-noir-800 bg-noir-900/60">
+                  <th className="p-4 text-left text-xs font-mono text-noir-500">TIMESTAMP</th>
+                  <th className="p-4 text-left text-xs font-mono text-noir-500">ACTION</th>
+                  <th className="p-4 text-left text-xs font-mono text-noir-500">OFFICER</th>
+                  <th className="p-4 text-left text-xs font-mono text-noir-500">DETAIL</th>
+                  <th className="p-4 text-left text-xs font-mono text-noir-500">VERSION</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredLogs.map((log, i) => (
+                  <motion.tr
+                    key={log.id}
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.02 }}
+                    className="border-b border-noir-800/50 hover:bg-noir-800/20 transition-colors"
+                  >
+                    <td className="p-4">
+                      <div className="flex items-center gap-2 text-sm text-noir-300 font-mono">
+                        <Clock className="w-3.5 h-3.5 text-noir-500" />
+                        {new Date(log.timestamp).toLocaleString()}
                       </div>
-                    )}
-                    <div className="flex items-center gap-1.5">
-                      <FileText className="w-3 h-3 text-noir-600" />
-                      <span className="text-xs font-mono text-noir-500">v{log.version}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          ))}
+                    </td>
+                    <td className="p-4">
+                      <span className={`inline-block px-2 py-1 text-xs font-mono border ${actionColors[log.action] || 'text-noir-400 bg-noir-800/40 border-noir-700'}`}>
+                        {log.action}
+                      </span>
+                    </td>
+                    <td className="p-4">
+                      <div className="flex items-center gap-2 text-sm text-noir-200 font-newsreader">
+                        <User className="w-3.5 h-3.5 text-noir-500" />
+                        {log.officer}
+                      </div>
+                    </td>
+                    <td className="p-4">
+                      <p className="text-sm text-noir-300 font-newsreader">{log.detail}</p>
+                    </td>
+                    <td className="p-4">
+                      <div className="flex items-center gap-2 text-xs text-noir-400 font-mono">
+                        <Hash className="w-3 h-3" />
+                        {log.version}
+                      </div>
+                    </td>
+                  </motion.tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
-
-      {/* Entry count */}
-      <div className="mt-4 text-xs text-noir-500 font-mono text-right">
-        Showing {filtered.length} of {auditLogs.length} entries
-      </div>
+      )}
     </div>
   )
 }

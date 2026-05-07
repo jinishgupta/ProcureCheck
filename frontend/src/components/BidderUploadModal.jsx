@@ -5,10 +5,6 @@ import FileUpload from './FileUpload'
 import { createBidder, uploadBidderDocuments } from '../api'
 
 export default function BidderUploadModal({ tenderId, onClose, onSuccess }) {
-  const [formData, setFormData] = useState({
-    name: '',
-    location: '',
-  })
   const [files, setFiles] = useState([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [step, setStep] = useState(0) // 0=idle, 1=creating, 2=uploading, 3=done
@@ -21,14 +17,19 @@ export default function BidderUploadModal({ tenderId, onClose, onSuccess }) {
 
     try {
       setStep(1)
-      const newBidder = await createBidder({
-        tenderId,
-        name: formData.name,
-        location: formData.location
+      
+      const uploadPromises = Array.from(files).map(async (file) => {
+        const bidderName = file.name.replace(/\.[^/.]+$/, "")
+        const newBidder = await createBidder({
+          tenderId,
+          name: bidderName,
+          location: 'Unknown'
+        })
+        await uploadBidderDocuments(newBidder.id, [file])
       })
 
       setStep(2)
-      await uploadBidderDocuments(newBidder.id, files)
+      await Promise.all(uploadPromises)
 
       setStep(3)
       setTimeout(() => {
@@ -66,30 +67,10 @@ export default function BidderUploadModal({ tenderId, onClose, onSuccess }) {
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
-            <label className="block text-xs font-mono text-noir-400 mb-2">Bidder Name *</label>
-            <input
-              type="text"
-              required
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              className="w-full bg-noir-850 border border-noir-700 px-3 py-2 text-noir-100 font-newsreader focus:outline-none focus:border-amber-500 transition-colors"
-              placeholder="e.g., Armour Systems Pvt Ltd"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-mono text-noir-400 mb-2">Location</label>
-            <input
-              type="text"
-              value={formData.location}
-              onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-              className="w-full bg-noir-850 border border-noir-700 px-3 py-2 text-noir-100 font-newsreader focus:outline-none focus:border-amber-500 transition-colors"
-              placeholder="e.g., New Delhi, India"
-            />
-          </div>
-
-          <div>
             <label className="block text-xs font-mono text-noir-400 mb-2">Bidder Documents *</label>
+            <p className="text-xs text-amber-500 font-mono mb-4">
+              Note: Each file selected will be treated as a separate bidder. The filename will be used as the bidder's name.
+            </p>
             <FileUpload 
               onFilesSelected={setFiles}
               accept=".pdf,.zip"
@@ -109,11 +90,11 @@ export default function BidderUploadModal({ tenderId, onClose, onSuccess }) {
               <div className="space-y-1 text-xs text-noir-400 font-mono ml-6">
                 <div className="flex items-center gap-2">
                   {step > 1 ? <CheckCircle2 className="w-3 h-3 text-jade-500" /> : step === 1 ? '•' : ''}
-                  <span className={step >= 1 ? 'text-noir-200' : ''}>Creating bidder record</span>
+                  <span className={step >= 1 ? 'text-noir-200' : ''}>Creating bidder records</span>
                 </div>
                 <div className="flex items-center gap-2">
                   {step > 2 ? <CheckCircle2 className="w-3 h-3 text-jade-500" /> : step === 2 ? '•' : ''}
-                  <span className={step >= 2 ? 'text-noir-200' : ''}>Uploading documents ({files.length} files)</span>
+                  <span className={step >= 2 ? 'text-noir-200' : ''}>Uploading & processing {files.length} bidders</span>
                 </div>
               </div>
             </div>
@@ -130,7 +111,7 @@ export default function BidderUploadModal({ tenderId, onClose, onSuccess }) {
             </button>
             <button
               type="submit"
-              disabled={isProcessing || !formData.name || files.length === 0}
+              disabled={isProcessing || files.length === 0}
               className="flex items-center gap-2 px-5 py-2 bg-amber-500 text-noir-950 text-xs font-mono font-bold hover:bg-amber-400 disabled:opacity-50"
             >
               <Upload className="w-3 h-3" />

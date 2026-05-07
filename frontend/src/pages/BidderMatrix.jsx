@@ -1,25 +1,74 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Users, AlertTriangle, Download, Plus } from 'lucide-react'
+import { Users, AlertTriangle, Download, Plus, PlayCircle, Loader2 } from 'lucide-react'
 import MatrixCell from '../components/MatrixCell'
-import { bidders, extractedCriteria, matrixData } from '../data/mockData'
 import BidderUploadModal from '../components/BidderUploadModal'
 import jsPDF from 'jspdf'
 import 'jspdf-autotable'
-
-// Use a subset of criteria that have matrix data
-const matrixCriteria = extractedCriteria.filter((c) => [1, 2, 3, 8, 9].includes(c.id))
+import { getEvaluationMatrix, request } from '../api'
 
 export default function BidderMatrix({ tenderId }) {
-  // Count verdicts
+  const [bidders, setBidders] = useState([])
+  const [matrixCriteria, setMatrixCriteria] = useState([])
+  const [matrixData, setMatrixData] = useState({})
+  const [loading, setLoading] = useState(true)
+  const [evaluating, setEvaluating] = useState(false)
+  const [showUpload, setShowUpload] = useState(false)
+
+  const fetchData = async () => {
+    setLoading(true)
+    try {
+      const data = await getEvaluationMatrix(tenderId)
+      setBidders(data.bidders || [])
+      setMatrixCriteria(data.criteria || [])
+      
+      const formattedMatrix = {}
+      if (data.evaluations) {
+        data.evaluations.forEach(evalRow => {
+          if (!formattedMatrix[evalRow.bidder_id]) {
+            formattedMatrix[evalRow.bidder_id] = {}
+          }
+          formattedMatrix[evalRow.bidder_id][evalRow.criterion_id] = evalRow
+        })
+      }
+      setMatrixData(formattedMatrix)
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (tenderId) fetchData()
+  }, [tenderId])
+
+  const handleRunEvaluation = async () => {
+    setEvaluating(true)
+    try {
+      await request(`/matching/run/${tenderId}`, { method: 'POST' })
+      alert("Evaluation started in background! This will take a moment.")
+      // Simple polling for UI demo purposes
+      const interval = setInterval(async () => {
+        const data = await getEvaluationMatrix(tenderId)
+        if (data.evaluations && data.evaluations.length > 0) {
+          fetchData()
+          setEvaluating(false)
+          clearInterval(interval)
+        }
+      }, 5000)
+    } catch (e) {
+      console.error(e)
+      setEvaluating(false)
+      alert("Error starting evaluation: " + e.message)
+    }
+  }
   const verdictCounts = { PASS: 0, FAIL: 0, REVIEW: 0 }
   Object.values(matrixData).forEach((bidder) => {
     Object.values(bidder).forEach((cell) => {
       verdictCounts[cell.verdict]++
     })
   })
-
-  const [showUpload, setShowUpload] = useState(false)
 
   const handleExportPDF = () => {
     const doc = new jsPDF()
@@ -146,7 +195,8 @@ export default function BidderMatrix({ tenderId }) {
           </button>
           <button
             onClick={handleExportPDF}
-            className="flex items-center gap-2 px-4 py-2 border border-amber-500/50 bg-amber-500/10 text-amber-500 text-xs font-mono hover:bg-amber-500/20 transition-colors"
+            disabled={bidders.length === 0 || Object.keys(matrixData).length === 0}
+            className="flex items-center gap-2 px-4 py-2 border border-amber-500/50 bg-amber-500/10 text-amber-500 text-xs font-mono hover:bg-amber-500/20 transition-colors disabled:opacity-50"
           >
             <Download className="w-4 h-4" />
             EXPORT REPORT
@@ -174,94 +224,91 @@ export default function BidderMatrix({ tenderId }) {
         </div>
       </div>
 
-      {/* Matrix Table */}
-      <div className="border border-noir-800 bg-noir-900/30 overflow-x-auto">
-        <table className="w-full min-w-[700px]">
-          <thead>
-            <tr className="border-b border-noir-800">
-              <th className="p-4 text-left text-xs font-mono text-noir-500 w-48 bg-noir-900/80 sticky left-0 z-10">
-                CRITERION
-              </th>
-              {bidders.map((bidder) => (
-                <th key={bidder.id} className="p-4 text-center">
-                  <div className="text-xs font-syne font-semibold text-noir-100 mb-0.5">{bidder.name}</div>
-                  <div className="text-xs font-mono text-noir-500">{bidder.location}</div>
-                  <div className="flex items-center justify-center gap-1 mt-1">
-                    <div className={`w-1.5 h-1.5 ${bidder.ocrConfidence >= 0.9 ? 'bg-jade-500' : bidder.ocrConfidence >= 0.8 ? 'bg-amber-500' : 'bg-crimson-500'}`} />
-                    <span className="text-xs font-mono text-noir-500">OCR {(bidder.ocrConfidence * 100).toFixed(0)}%</span>
-                  </div>
+      {loading ? (
+        <div className="flex items-center justify-center p-12 border border-noir-800 bg-noir-900/30">
+          <Loader2 className="w-8 h-8 text-amber-500 animate-spin" />
+        </div>
+      ) : bidders.length === 0 ? (
+        <div className="flex flex-col items-center justify-center p-12 border border-noir-800 bg-noir-900/30 text-center">
+          <Users className="w-12 h-12 text-noir-600 mb-4" />
+          <p className="text-noir-300 font-mono text-sm mb-4">No bidders uploaded yet.</p>
+          <button
+            onClick={() => setShowUpload(true)}
+            className="px-4 py-2 bg-amber-500 text-noir-950 text-xs font-mono font-bold hover:bg-amber-400"
+          >
+            UPLOAD BIDDER
+          </button>
+        </div>
+      ) : Object.keys(matrixData).length === 0 ? (
+        <div className="flex flex-col items-center justify-center p-12 border border-noir-800 bg-noir-900/30 text-center">
+          <AlertTriangle className="w-12 h-12 text-amber-600 mb-4" />
+          <p className="text-noir-300 font-mono text-sm mb-2">Bidders uploaded, but evaluation has not run yet.</p>
+          <p className="text-noir-400 font-mono text-xs">Evaluation will run automatically after bidder documents are processed.</p>
+        </div>
+      ) : (
+        <div className="border border-noir-800 bg-noir-900/30 overflow-x-auto">
+          <table className="w-full min-w-[700px]">
+            <thead>
+              <tr className="border-b border-noir-800">
+                <th className="p-4 text-left text-xs font-mono text-noir-500 w-48 bg-noir-900/80 sticky left-0 z-10">
+                  CRITERION
                 </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {matrixCriteria.map((criterion) => (
-              <tr key={criterion.id} className="border-b border-noir-800/50 hover:bg-noir-800/10 transition-colors">
-                <td className="p-4 bg-noir-900/80 sticky left-0 z-10 border-r border-noir-800/50">
-                  <div className="text-sm text-noir-200 font-newsreader mb-0.5">{criterion.field}</div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-mono text-noir-500">{criterion.type}</span>
-                    {criterion.mandatory && <span className="text-xs font-mono text-amber-500">M</span>}
-                  </div>
-                </td>
-                {bidders.map((bidder) => {
-                  const cellData = matrixData[bidder.id]?.[criterion.id]
-                  if (!cellData) {
+                {bidders.map((bidder) => (
+                  <th key={bidder.id} className="p-4 text-center">
+                    <div className="text-xs font-syne font-semibold text-noir-100 mb-0.5">{bidder.name}</div>
+                    <div className="text-xs font-mono text-noir-500">{bidder.location}</div>
+                    <div className="flex items-center justify-center gap-1 mt-1">
+                      <div className={`w-1.5 h-1.5 ${bidder.ocr_confidence >= 0.9 ? 'bg-jade-500' : bidder.ocr_confidence >= 0.8 ? 'bg-amber-500' : 'bg-crimson-500'}`} />
+                      <span className="text-xs font-mono text-noir-500">OCR {(bidder.ocr_confidence * 100).toFixed(0)}%</span>
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {matrixCriteria.map((criterion) => (
+                <tr key={criterion.id} className="border-b border-noir-800/50 hover:bg-noir-800/10 transition-colors">
+                  <td className="p-4 bg-noir-900/80 sticky left-0 z-10 border-r border-noir-800/50">
+                    <div className="text-sm text-noir-200 font-newsreader mb-0.5">{criterion.field}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono text-noir-500">{criterion.type}</span>
+                      {criterion.mandatory && <span className="text-xs font-mono text-amber-500">M</span>}
+                    </div>
+                  </td>
+                  {bidders.map((bidder) => {
+                    const cellData = matrixData[bidder.id]?.[criterion.id]
+                    if (!cellData) {
+                      return (
+                        <td key={bidder.id} className="p-2">
+                          <div className="flex items-center justify-center aspect-square border border-noir-800 bg-noir-900/40 text-noir-600 text-xs font-mono">
+                            N/A
+                          </div>
+                        </td>
+                      )
+                    }
                     return (
                       <td key={bidder.id} className="p-2">
-                        <div className="flex items-center justify-center aspect-square border border-noir-800 bg-noir-900/40 text-noir-600 text-xs font-mono">
-                          N/A
-                        </div>
+                        <MatrixCell
+                          data={cellData}
+                          onClick={() => {}}
+                        />
                       </td>
                     )
-                  }
-                  return (
-                    <td key={bidder.id} className="p-2">
-                      <MatrixCell
-                        data={cellData}
-                        bidderName={bidder.name}
-                        criterionName={criterion.field}
-                      />
-                    </td>
-                  )
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Cross-validation alerts */}
-      <div className="mt-6 space-y-2">
-        <h3 className="font-syne font-semibold text-noir-50 text-sm mb-3">CROSS-DOCUMENT ALERTS</h3>
-        {[
-          { bidder: 'Surya Protective Gear', issue: 'Company name inconsistency between PAN card ("Surya Protective Gear Pvt Ltd") and work orders ("Surya Protection Systems")', severity: 'high' },
-          { bidder: 'ShieldTech Industries', issue: 'Turnover value in balance sheet (₹14.8Cr) differs from ITR summary (₹15.1Cr) — variance 2.0%', severity: 'medium' },
-        ].map((alert, i) => (
-          <motion.div
-            key={i}
-            initial={{ opacity: 0, y: 5 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.1 }}
-            className={`flex items-start gap-3 p-4 border ${
-              alert.severity === 'high' ? 'border-crimson-600/30 bg-crimson-900/10' : 'border-amber-700/30 bg-amber-900/10'
-            }`}
-          >
-            <AlertTriangle className={`w-4 h-4 shrink-0 mt-0.5 ${alert.severity === 'high' ? 'text-crimson-400' : 'text-amber-500'}`} />
-            <div>
-              <span className="text-xs font-mono text-noir-400 block mb-0.5">{alert.bidder}</span>
-              <p className="text-sm text-noir-200 font-newsreader">{alert.issue}</p>
-            </div>
-          </motion.div>
-        ))}
-      </div>
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {showUpload && (
         <BidderUploadModal
           tenderId={tenderId}
           onClose={() => setShowUpload(false)}
           onSuccess={() => {
-            // UI refresh logic here
+            fetchData()
+            setShowUpload(false)
           }}
         />
       )}

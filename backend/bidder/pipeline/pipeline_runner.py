@@ -8,15 +8,15 @@ Output: two files per bidder
   - bidder_sections.jsonl : one JSON line per chunk (text + metadata)
 """
 
-from pipeline.pdf_processor import DocumentProcessor
-from pipeline.image_preprocessor import preprocess
-from pipeline.ocr_engine import extract_text_with_confidence
-from pipeline.index_extractor import extract_index
-from pipeline.section_chunker import assign_section
-from pipeline.embedding_engine import embed
-from pipeline.faiss_indexer import BidderIndex
-from pipeline.criteria_mapper import map_criteria_to_sections, load_criteria_with_ids
-from config import *
+from bidder.pipeline.pdf_processor import DocumentProcessor
+from bidder.pipeline.image_preprocessor import preprocess
+from bidder.pipeline.ocr_engine import extract_text_with_confidence
+from bidder.pipeline.index_extractor import extract_index
+from bidder.pipeline.section_chunker import assign_section
+from bidder.pipeline.embedding_engine import embed
+from bidder.pipeline.faiss_indexer import BidderIndex
+from bidder.pipeline.criteria_mapper import map_criteria_to_sections, load_criteria_with_ids
+from bidder.pipeline.config import *
 
 from collections import defaultdict
 import json
@@ -25,11 +25,10 @@ import os
 
 class BidderPipeline:
 
-    def __init__(self, file_path, eligibility_json_path="data/input/eligibility.json",
-                 output_dir="data/outputs"):
+    def __init__(self, file_path, tender_id: str, bidder_id: str = "bidder"):
         self.file_path        = file_path
-        self.eligibility_path = eligibility_json_path
-        self.output_dir       = output_dir
+        self.tender_id        = tender_id
+        self.bidder_id        = bidder_id
         self.index            = BidderIndex(FAISS_DIM)
         self.section_map      = {}       # { "section name": 0-based page }
         self.criteria_by_id   = {}       # { "C01": { text, applies_to, ... } }
@@ -138,7 +137,7 @@ class BidderPipeline:
 
         if self.section_map:
             section_to_ids, self.criteria_by_id = map_criteria_to_sections(
-                self.eligibility_path, self.section_map
+                self.tender_id, self.section_map
             )
             # Invert for manifest: criteria_id → [sections]
             for sec, ids in section_to_ids.items():
@@ -151,7 +150,7 @@ class BidderPipeline:
                 print(f"    {cid}: {secs}  ← \"{ctext}...\"")
         else:
             try:
-                self.criteria_by_id, _ = load_criteria_with_ids(self.eligibility_path)
+                self.criteria_by_id, _ = load_criteria_with_ids(self.tender_id)
             except Exception:
                 pass
 
@@ -265,18 +264,26 @@ class BidderPipeline:
 
     # ------------------------------------------------------------------
     def save_output(self, bidder_id=None):
-        os.makedirs(self.output_dir, exist_ok=True)
-        bid = bidder_id or self._manifest.get("bidder_id", "bidder")
+        bid = bidder_id or self.bidder_id or self._manifest.get("bidder_id", "bidder")
+        output_dir = os.path.join("data", "bidder_indexes", bid)
+        os.makedirs(output_dir, exist_ok=True)
 
-        # File 1: manifest (no text, lightweight)
-        manifest_path = os.path.join(self.output_dir, f"{bid}_manifest.json")
-        with open(manifest_path, "w") as f:
-            json.dump(self._manifest, f, indent=2)
-        print(f"💾 Manifest  → {manifest_path}")
+        # File 1: faiss.index
+        index_path = os.path.join(output_dir, "faiss.index")
+        self.index.save(index_path)
+        print(f"💾 FAISS Index → {index_path}")
 
-        # File 2: chunks as JSONL (one line per chunk, lazy-readable)
-        chunks_path = os.path.join(self.output_dir, f"{bid}_sections.jsonl")
-        with open(chunks_path, "w") as f:
-            for chunk in self._all_chunks:
-                f.write(json.dumps(chunk) + "\n")
-        print(f"💾 Sections  → {chunks_path}  ({len(self._all_chunks)} chunks)")
+        # File 2: pages.json (mapped from chunks to match engine.py format)
+        pages_out = []
+        for c in self._all_chunks:
+            pages_out.append({
+                "page_number": c["pages"][0] if c.get("pages") else 1,
+                "text": c["text"],
+                "label": f"[{c['chunk_id']}]",
+                "ocr_confidence": c["ocr_confidence"]
+            })
+            
+        pages_path = os.path.join(output_dir, "pages.json")
+        with open(pages_path, "w") as f:
+            json.dump(pages_out, f, indent=2)
+        print(f"💾 Pages json  → {pages_path} ({len(pages_out)} items)")

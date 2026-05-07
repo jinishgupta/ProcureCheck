@@ -9,6 +9,10 @@ export default function ReviewItem({ item, onConfirm, onOverride, onRescan }) {
     low: 'border-l-noir-500',
   }
 
+  // Safely access signals with defaults
+  const signals = item.signals || { extraction: 0, ocr: 0, retrieval: 0, llm: 0 }
+  const confidence = item.confidence || 0
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -23,12 +27,14 @@ export default function ReviewItem({ item, onConfirm, onOverride, onRescan }) {
               <AlertTriangle className="w-4 h-4 text-amber-500" />
               <span className="text-xs font-mono text-amber-500 tracking-wider">REVIEW REQUIRED</span>
             </div>
-            <h4 className="font-syne font-semibold text-noir-50 mb-0.5">{item.criterion}</h4>
-            <p className="text-sm text-noir-400 font-mono">{item.bidder}</p>
+            <h4 className="font-syne font-semibold text-noir-50 mb-0.5">
+              {item.criterion || 'Unknown Criterion'}
+            </h4>
+            <p className="text-sm text-noir-400 font-mono">{item.bidder || 'Unknown Bidder'}</p>
           </div>
           <div className="text-right">
             <div className="text-2xl font-mono font-bold text-amber-400">
-              {(item.confidence * 100).toFixed(0)}%
+              {(confidence * 100).toFixed(0)}%
             </div>
             <span className="text-xs text-noir-500 font-mono">confidence</span>
           </div>
@@ -38,21 +44,25 @@ export default function ReviewItem({ item, onConfirm, onOverride, onRescan }) {
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div className="border border-noir-800 p-3">
             <span className="text-xs text-noir-500 font-mono block mb-1">EXTRACTED</span>
-            <p className="text-sm text-noir-200 font-newsreader">{item.extractedValue}</p>
+            <p className="text-sm text-noir-200 font-newsreader">
+              {item.extractedValue || item.extracted_value || 'Not found'}
+            </p>
           </div>
           <div className="border border-noir-800 p-3">
             <span className="text-xs text-noir-500 font-mono block mb-1">REQUIRED</span>
-            <p className="text-sm text-noir-200 font-newsreader">{item.requiredValue}</p>
+            <p className="text-sm text-noir-200 font-newsreader">
+              {item.requiredValue || item.required_value || 'N/A'}
+            </p>
           </div>
         </div>
 
         {/* Confidence breakdown */}
         <div className="mb-5">
           <ConfidenceBar
-            extraction={item.signals.extraction}
-            ocr={item.signals.ocr}
-            retrieval={item.signals.retrieval}
-            llm={item.signals.llm}
+            extraction={signals.extraction || 0}
+            ocr={signals.ocr || 0}
+            retrieval={signals.retrieval || 0}
+            llm={signals.llm || 0}
             size="sm"
           />
         </div>
@@ -60,7 +70,7 @@ export default function ReviewItem({ item, onConfirm, onOverride, onRescan }) {
         {/* Reason */}
         <div className="bg-noir-850 border border-noir-800 p-3 mb-5">
           <span className="text-xs text-noir-500 font-mono block mb-1">REASON FOR REVIEW</span>
-          <p className="text-sm text-noir-300 font-newsreader">{item.reason}</p>
+          <p className="text-sm text-noir-300 font-newsreader">{item.reason || 'Requires manual verification'}</p>
         </div>
 
         {/* Actions */}

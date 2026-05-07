@@ -16,9 +16,11 @@ class Settings(BaseSettings):
     # Environment
     environment: str = "development"
     
-    # Gemini API Keys
+    # API Keys
     gemini_api_key_1: str = ""
     gemini_api_key_2: str = ""
+    anthropic_api_key: str = ""
+    groq_api_key: str = ""
     
     @property
     def cors_origins_list(self) -> List[str]:

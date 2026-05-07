@@ -12,6 +12,7 @@ anthropic
 keybert
 sentence-transformers
 faiss-cpu
+google-genai
 opencv-python
 numpy
 google-cloud-vision

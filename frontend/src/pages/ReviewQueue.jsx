@@ -1,33 +1,62 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { AlertTriangle, Filter } from 'lucide-react'
+import { AlertTriangle, Filter, Loader2 } from 'lucide-react'
 import ReviewItem from '../components/ReviewItem'
-import { reviewItems } from '../data/mockData'
+import { getReviewQueue } from '../api'
 
 export default function ReviewQueue({ tenderId }) {
-  const [items, setItems] = useState(reviewItems)
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all')
-  const [actionLog, setActionLog] = useState([])
 
-  const filtered = filter === 'all' ? items : items.filter((i) => i.urgency === filter)
+  const fetchReviewQueue = async () => {
+    setLoading(true)
+    try {
+      const data = await getReviewQueue(tenderId)
+      setItems(data.items || [])
+    } catch (error) {
+      console.error('Error fetching review queue:', error)
+      setItems([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (tenderId) {
+      fetchReviewQueue()
+    }
+  }, [tenderId])
+
+  const filteredItems = items.filter(item => {
+    if (filter === 'all') return true
+    if (filter === 'pending') return item.status === 'pending'
+    return item.urgency === filter
+  })
+
+  const urgencyCounts = {
+    high: items.filter(i => i.urgency === 'high' && i.status === 'pending').length,
+    medium: items.filter(i => i.urgency === 'medium' && i.status === 'pending').length,
+    low: items.filter(i => i.urgency === 'low' && i.status === 'pending').length,
+  }
 
   const handleConfirm = (id) => {
-    setActionLog((prev) => [...prev, { id, action: 'CONFIRMED', time: new Date().toLocaleTimeString() }])
-    setItems((prev) => prev.filter((i) => i.id !== id))
+    // Refresh after action
+    fetchReviewQueue()
   }
 
   const handleOverride = (id) => {
-    setActionLog((prev) => [...prev, { id, action: 'OVERRIDDEN', time: new Date().toLocaleTimeString() }])
-    setItems((prev) => prev.filter((i) => i.id !== id))
+    // Refresh after action
+    fetchReviewQueue()
   }
 
   const handleRescan = (id) => {
-    setActionLog((prev) => [...prev, { id, action: 'RE-SCAN REQUESTED', time: new Date().toLocaleTimeString() }])
+    // Refresh after action
+    fetchReviewQueue()
   }
 
   return (
     <div>
-
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
         <div>
@@ -63,49 +92,58 @@ export default function ReviewQueue({ tenderId }) {
         </div>
       </div>
 
-      {/* Pending count */}
-      <div className="flex items-center gap-4 mb-8 p-5 border border-amber-700/30 bg-amber-900/10">
-        <AlertTriangle className="w-5 h-5 text-amber-500" />
-        <span className="text-base text-noir-200 font-newsreader">
-          <strong className="text-amber-400 font-syne">{items.length}</strong> items pending review
-        </span>
+      {/* Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <div className="border border-crimson-600/30 bg-crimson-900/10 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle className="w-4 h-4 text-crimson-400" />
+            <span className="text-xs font-mono text-crimson-400">HIGH URGENCY</span>
+          </div>
+          <div className="text-2xl font-syne font-bold text-crimson-300">{urgencyCounts.high}</div>
+        </div>
+        <div className="border border-amber-700/30 bg-amber-900/10 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle className="w-4 h-4 text-amber-500" />
+            <span className="text-xs font-mono text-amber-500">MEDIUM URGENCY</span>
+          </div>
+          <div className="text-2xl font-syne font-bold text-amber-400">{urgencyCounts.medium}</div>
+        </div>
+        <div className="border border-noir-700 bg-noir-800/40 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle className="w-4 h-4 text-noir-400" />
+            <span className="text-xs font-mono text-noir-400">LOW URGENCY</span>
+          </div>
+          <div className="text-2xl font-syne font-bold text-noir-300">{urgencyCounts.low}</div>
+        </div>
       </div>
 
       {/* Review items */}
-      <div className="space-y-4">
-        {filtered.length === 0 ? (
-          <div className="text-center py-16 border border-noir-800 bg-noir-900/40">
-            <p className="text-noir-400 font-newsreader">No items match the current filter.</p>
-          </div>
-        ) : (
-          filtered.map((item) => (
-            <ReviewItem
+      {loading ? (
+        <div className="flex items-center justify-center p-12 border border-noir-800 bg-noir-900/30">
+          <Loader2 className="w-8 h-8 text-amber-500 animate-spin" />
+        </div>
+      ) : filteredItems.length === 0 ? (
+        <div className="text-center py-16 border border-noir-800 bg-noir-900/40">
+          <AlertTriangle className="w-12 h-12 text-noir-600 mx-auto mb-4" />
+          <p className="text-noir-400 font-newsreader">No items in review queue.</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {filteredItems.map((item, i) => (
+            <motion.div
               key={item.id}
-              item={item}
-              onConfirm={handleConfirm}
-              onOverride={handleOverride}
-              onRescan={handleRescan}
-            />
-          ))
-        )}
-      </div>
-
-      {/* Action log */}
-      {actionLog.length > 0 && (
-        <div className="mt-8 border border-noir-800 bg-noir-900/40">
-          <div className="p-4 border-b border-noir-800">
-            <h3 className="font-syne font-semibold text-noir-50 text-sm">SESSION LOG</h3>
-          </div>
-          <div className="p-4 space-y-2">
-            {actionLog.map((log, i) => (
-              <div key={i} className="flex items-center gap-3 text-sm">
-                <span className="text-xs font-mono text-noir-500">{log.time}</span>
-                <span className="text-noir-300 font-newsreader">
-                  Item {log.id} → <strong className="text-noir-100">{log.action}</strong>
-                </span>
-              </div>
-            ))}
-          </div>
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.05 }}
+            >
+              <ReviewItem
+                item={item}
+                onConfirm={handleConfirm}
+                onOverride={handleOverride}
+                onRescan={handleRescan}
+              />
+            </motion.div>
+          ))}
         </div>
       )}
     </div>

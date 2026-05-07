@@ -20,6 +20,9 @@ async function request(path, options = {}) {
   return res.json()
 }
 
+// Export request for custom API calls
+export { request }
+
 // ─── Tenders ──────────────────────────────────────────────
 
 export async function getTenders() {

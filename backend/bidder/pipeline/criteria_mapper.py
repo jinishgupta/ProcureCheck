@@ -1,43 +1,44 @@
-import json
 import os
 import re
 import anthropic
+from db.database import Database
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 
-def load_criteria_with_ids(eligibility_json_path):
+def load_criteria_with_ids(tender_id: str):
     """
-    Loads criteria and assigns short IDs: C01, C02, ...
+    Loads criteria from the database for the given tender.
     Returns:
-        criteria_by_id: { "C01": { text, applies_to, source_path, page_range }, ... }
+        criteria_by_id: { "UUID": { text, ... }, ... }
         criteria_list:  [ { id, text, ... }, ... ]
     """
-    with open(eligibility_json_path, 'r') as f:
-        data = json.load(f)
-
     criteria_by_id = {}
     criteria_list  = []
-    for idx, c in enumerate(data.get("criteria", [])):
-        cid = f"C{idx+1:02d}"
-        entry = {**c, "id": cid}
-        criteria_by_id[cid] = entry
-        criteria_list.append(entry)
+    
+    with Database.get_cursor() as cursor:
+        cursor.execute("SELECT id, requirement as text, field, type FROM criteria WHERE tender_id = %s", (tender_id,))
+        rows = cursor.fetchall()
+        for row in rows:
+            entry = dict(row)
+            cid = entry["id"]
+            criteria_by_id[cid] = entry
+            criteria_list.append(entry)
 
     return criteria_by_id, criteria_list
 
 
-def map_criteria_to_sections(eligibility_json_path, section_map):
+def map_criteria_to_sections(tender_id: str, section_map: dict):
     """
     Maps criteria → relevant index sections using Claude (or keyword fallback).
     Returns:
-        section_to_ids: { "section_name": ["C01", "C05", ...] }
+        section_to_ids: { "section_name": ["UUID", "UUID", ...] }
         criteria_by_id: full lookup dict
     """
     try:
-        criteria_by_id, criteria_list = load_criteria_with_ids(eligibility_json_path)
+        criteria_by_id, criteria_list = load_criteria_with_ids(tender_id)
     except Exception as e:
-        print(f"⚠️ Could not load eligibility json: {e}")
+        print(f"⚠️ Could not load criteria from DB: {e}")
         return {s: [] for s in section_map.keys()}, {}
 
     section_to_ids = {}
