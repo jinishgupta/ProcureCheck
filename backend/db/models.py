@@ -160,12 +160,24 @@ class ReviewItemCreate(ReviewItemBase):
     pass
 
 
+class ReviewItemUpdate(BaseModel):
+    status: str
+    officer: str
+    reason: Optional[str] = None
+
+
 class ReviewItem(ReviewItemBase):
     id: str
     status: str = "pending"  # pending, confirmed, overridden
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[datetime] = None
     created_at: datetime
+    # Additional fields from JOIN query
+    extracted_value: Optional[str] = None
+    confidence: Optional[float] = None
+    signals: Optional[dict] = None
+    criterion: Optional[str] = None  # criterion field name
+    bidder: Optional[str] = None     # bidder name
     
     class Config:
         from_attributes = True

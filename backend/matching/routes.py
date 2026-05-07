@@ -3,7 +3,7 @@ from typing import Optional
 from db.models import (
     Evaluation, EvaluationCreate, EvaluationMatrixResponse,
     ReviewQueueResponse, AuditTrailResponse, DashboardStats,
-    Bidder, Criterion, ReviewItem, AuditLog
+    Bidder, Criterion, ReviewItem, AuditLog, ReviewItemUpdate
 )
 from db.database import Database
 from datetime import datetime
@@ -188,58 +188,100 @@ async def create_evaluation(evaluation: EvaluationCreate):
 
 @router.get("/review-queue/{tender_id}", response_model=ReviewQueueResponse)
 async def get_review_queue(tender_id: str, status: Optional[str] = "pending"):
-    """Get review queue for a tender"""
+    """Get review queue for a tender with full details"""
     try:
         with Database.get_cursor() as cursor:
+            # Join with evaluations, criteria, and bidders to get full details
+            query = """
+                SELECT 
+                    rq.*,
+                    e.extracted_value,
+                    e.confidence,
+                    e.signals,
+                    c.field as criterion,
+                    b.name as bidder
+                FROM review_queue rq
+                JOIN evaluations e ON rq.evaluation_id = e.id
+                JOIN criteria c ON e.criterion_id = c.id
+                JOIN bidders b ON e.bidder_id = b.id
+                WHERE rq.tender_id = %s
+            """
+            
             if status:
-                cursor.execute("""
-                    SELECT * FROM review_queue
-                    WHERE tender_id = %s AND status = %s
-                    ORDER BY created_at DESC
-                """, (tender_id, status))
+                query += " AND rq.status = %s"
+                cursor.execute(query + " ORDER BY rq.created_at DESC", (tender_id, status))
             else:
-                cursor.execute("""
-                    SELECT * FROM review_queue
-                    WHERE tender_id = %s
-                    ORDER BY created_at DESC
-                """, (tender_id,))
+                cursor.execute(query + " ORDER BY rq.created_at DESC", (tender_id,))
 
             rows = cursor.fetchall()
-            items = [ReviewItem(**dict(row)) for row in rows]
+            items = []
+            for row in rows:
+                row_dict = dict(row)
+                # Parse signals JSON if it's a string
+                if isinstance(row_dict.get('signals'), str):
+                    import json
+                    row_dict['signals'] = json.loads(row_dict['signals'])
+                items.append(ReviewItem(**row_dict))
+            
             return ReviewQueueResponse(items=items, total=len(items))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.patch("/review-queue/{review_id}")
-async def update_review_item(review_id: str, status: str, officer: str, reason: Optional[str] = None):
-    """Update a review item (confirm/override)"""
+async def update_review_item(review_id: str, update_data: ReviewItemUpdate):
+    """Update a review item (confirm/override) and update the evaluation verdict"""
     try:
         with Database.get_cursor() as cursor:
             now = datetime.utcnow()
+            status = update_data.status
+            officer = update_data.officer
+            reason = update_data.reason
 
+            # Get the review item to find the evaluation_id
+            cursor.execute("""
+                SELECT * FROM review_queue WHERE id = %s
+            """, (review_id,))
+            review_row = cursor.fetchone()
+            
+            if not review_row:
+                raise HTTPException(status_code=404, detail="Review item not found")
+            
+            review_data = dict(review_row)
+            evaluation_id = review_data["evaluation_id"]
+            
+            # Update review queue status
             cursor.execute("""
                 UPDATE review_queue
                 SET status = %s, reviewed_by = %s, reviewed_at = %s
                 WHERE id = %s
-                RETURNING *
             """, (status, officer, now, review_id))
 
-            row = cursor.fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="Review item not found")
+            # Update the evaluation verdict based on officer decision
+            new_verdict = None
+            if status == "confirmed":
+                new_verdict = "PASS"
+            elif status == "overridden":
+                new_verdict = "FAIL"
+            
+            if new_verdict:
+                cursor.execute("""
+                    UPDATE evaluations
+                    SET verdict = %s, confidence = 1.0
+                    WHERE id = %s
+                """, (new_verdict, evaluation_id))
 
-            review_data = dict(row)
+            # Log the action
             action = "REVIEW_CONFIRMED" if status == "confirmed" else "REVIEW_OVERRIDE"
             cursor.execute("""
                 INSERT INTO audit_logs (id, tender_id, action, officer, detail, version, timestamp)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (
                 str(uuid.uuid4()), review_data["tender_id"], action, officer,
-                reason or f"Review item {status}", "1.0", now
+                reason or f"Review item {status} - verdict changed to {new_verdict}", "1.0", now
             ))
 
-            return {"message": "Review item updated successfully"}
+            return {"message": "Review item and evaluation updated successfully", "new_verdict": new_verdict}
     except HTTPException:
         raise
     except Exception as e:

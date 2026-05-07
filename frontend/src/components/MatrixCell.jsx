@@ -27,9 +27,6 @@ export default function MatrixCell({ data, bidderName, criterionName }) {
       >
         <div className={`w-2 h-2 mb-2 ${verdictDot[data.verdict]}`} />
         <span className="text-xs font-mono font-semibold">{data.verdict}</span>
-        <span className="text-xs font-mono text-noir-500 mt-0.5">
-          {(data.confidence * 100).toFixed(0)}%
-        </span>
       </motion.button>
 
       {/* Detail panel overlay */}

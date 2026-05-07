@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { AlertTriangle, Filter, Loader2 } from 'lucide-react'
 import ReviewItem from '../components/ReviewItem'
-import { getReviewQueue } from '../api'
+import { getReviewQueue, request } from '../api'
 
 export default function ReviewQueue({ tenderId }) {
   const [items, setItems] = useState([])
@@ -40,19 +40,40 @@ export default function ReviewQueue({ tenderId }) {
     low: items.filter(i => i.urgency === 'low' && i.status === 'pending').length,
   }
 
-  const handleConfirm = (id) => {
-    // Refresh after action
-    fetchReviewQueue()
+  const handleConfirm = async (id) => {
+    try {
+      await request(`/review-queue/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: 'confirmed',
+          officer: 'System User',
+          reason: 'Confirmed as PASS by officer'
+        })
+      })
+      // Refresh after action
+      fetchReviewQueue()
+    } catch (error) {
+      console.error('Error confirming review item:', error)
+      alert('Failed to confirm item')
+    }
   }
 
-  const handleOverride = (id) => {
-    // Refresh after action
-    fetchReviewQueue()
-  }
-
-  const handleRescan = (id) => {
-    // Refresh after action
-    fetchReviewQueue()
+  const handleOverride = async (id) => {
+    try {
+      await request(`/review-queue/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: 'overridden',
+          officer: 'System User',
+          reason: 'Marked as FAIL by officer'
+        })
+      })
+      // Refresh after action
+      fetchReviewQueue()
+    } catch (error) {
+      console.error('Error overriding review item:', error)
+      alert('Failed to override item')
+    }
   }
 
   return (
@@ -140,7 +161,6 @@ export default function ReviewQueue({ tenderId }) {
                 item={item}
                 onConfirm={handleConfirm}
                 onOverride={handleOverride}
-                onRescan={handleRescan}
               />
             </motion.div>
           ))}

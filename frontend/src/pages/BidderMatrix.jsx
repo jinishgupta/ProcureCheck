@@ -264,14 +264,14 @@ export default function BidderMatrix({ tenderId }) {
         </div>
       ) : (
         <div className="border border-noir-800 bg-noir-900/30 overflow-x-auto">
-          <table className="w-full min-w-[700px]">
+          <table className="w-full min-w-[700px] table-fixed">
             <thead>
               <tr className="border-b border-noir-800">
-                <th className="p-4 text-left text-xs font-mono text-noir-500 w-48 bg-noir-900/80 sticky left-0 z-10">
+                <th className="p-4 text-left text-xs font-mono text-noir-500 w-64 bg-noir-900/80 sticky left-0 z-10">
                   CRITERION
                 </th>
                 {bidders.map((bidder) => (
-                  <th key={bidder.id} className="p-4 text-center">
+                  <th key={bidder.id} className="p-4 text-center w-32">
                     <div className="text-xs font-syne font-semibold text-noir-100 mb-0.5">{bidder.name}</div>
                     <div className="text-xs font-mono text-noir-500">{bidder.location}</div>
                     <div className="flex items-center justify-center gap-1 mt-1">
@@ -296,15 +296,15 @@ export default function BidderMatrix({ tenderId }) {
                     const cellData = matrixData[bidder.id]?.[criterion.id]
                     if (!cellData) {
                       return (
-                        <td key={bidder.id} className="p-2">
-                          <div className="flex items-center justify-center aspect-square border border-noir-800 bg-noir-900/40 text-noir-600 text-xs font-mono">
+                        <td key={bidder.id} className="p-3">
+                          <div className="w-24 h-24 flex items-center justify-center border border-noir-800 bg-noir-900/40 text-noir-600 text-xs font-mono">
                             N/A
                           </div>
                         </td>
                       )
                     }
                     return (
-                      <td key={bidder.id} className="p-2">
+                      <td key={bidder.id} className="p-3">
                         <MatrixCell
                           data={cellData}
                           onClick={() => {}}
