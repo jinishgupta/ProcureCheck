@@ -74,6 +74,34 @@ export async function getBidders(tenderId) {
   return request(`/bidders/${query}`)
 }
 
+export async function createBidder({ tenderId, name, location }) {
+  return request('/bidders/', {
+    method: 'POST',
+    body: JSON.stringify({
+      tender_id: tenderId,
+      name,
+      location,
+      documents_count: 0,
+      ocr_confidence: 0
+    }),
+  })
+}
+
+export async function uploadBidderDocuments(bidderId, files) {
+  const formData = new FormData()
+  files.forEach(file => {
+    formData.append('files', file)
+  })
+
+  const url = `${API_BASE}/bidders/${bidderId}/upload`
+  const res = await fetch(url, { method: 'POST', body: formData })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.detail || `Upload error ${res.status}`)
+  }
+  return res.json()
+}
+
 // ─── Dashboard ────────────────────────────────────────────
 
 export async function getDashboardStats() {

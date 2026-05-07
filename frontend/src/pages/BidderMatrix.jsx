@@ -1,7 +1,11 @@
+import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { Users, AlertTriangle } from 'lucide-react'
+import { Users, AlertTriangle, Download, Plus } from 'lucide-react'
 import MatrixCell from '../components/MatrixCell'
 import { bidders, extractedCriteria, matrixData } from '../data/mockData'
+import BidderUploadModal from '../components/BidderUploadModal'
+import jsPDF from 'jspdf'
+import 'jspdf-autotable'
 
 // Use a subset of criteria that have matrix data
 const matrixCriteria = extractedCriteria.filter((c) => [1, 2, 3, 8, 9].includes(c.id))
@@ -15,18 +19,139 @@ export default function BidderMatrix({ tenderId }) {
     })
   })
 
+  const [showUpload, setShowUpload] = useState(false)
+
+  const handleExportPDF = () => {
+    const doc = new jsPDF()
+    
+    // Header
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(20)
+    doc.text('Tender Evaluation Report', 14, 22)
+    
+    doc.setFontSize(12)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Generated on: ${new Date().toLocaleDateString()}`, 14, 30)
+    
+    // Summary
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(14)
+    doc.text('Executive Summary', 14, 45)
+    
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'normal')
+    const summaryText = `This report evaluates ${bidders.length} bidders against ${matrixCriteria.length} key eligibility criteria. Below is the detailed breakdown of selections, rejections, and items flagged for manual review.`
+    doc.text(doc.splitTextToSize(summaryText, 180), 14, 52)
+    
+    let currentY = 70
+    
+    bidders.forEach((bidder, index) => {
+      if (currentY > 250) {
+        doc.addPage()
+        currentY = 20
+      }
+      
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(12)
+      doc.text(`${index + 1}. ${bidder.name}`, 14, currentY)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(10)
+      doc.text(`Location: ${bidder.location} | Overall OCR Confidence: ${(bidder.ocrConfidence * 100).toFixed(0)}%`, 14, currentY + 6)
+      
+      currentY += 15
+      
+      const tableData = []
+      let passCount = 0
+      let failCount = 0
+      let reviewCount = 0
+      
+      matrixCriteria.forEach(crit => {
+        const cell = matrixData[bidder.id]?.[crit.id]
+        if (cell) {
+          if (cell.verdict === 'PASS') passCount++
+          if (cell.verdict === 'FAIL') failCount++
+          if (cell.verdict === 'REVIEW') reviewCount++
+          
+          tableData.push([
+            crit.field,
+            cell.verdict,
+            cell.extractedValue,
+            cell.explanation
+          ])
+        }
+      })
+      
+      let status = 'SELECTED'
+      if (failCount > 0) status = 'REJECTED'
+      else if (reviewCount > 0) status = 'MARKED FOR REVIEW'
+      
+      doc.setFont('helvetica', 'bold')
+      doc.text(`Overall Status: ${status}`, 14, currentY)
+      currentY += 8
+      
+      let text = ""
+      if (status === 'SELECTED') {
+        text = `Bidder passed all ${passCount} criteria with high confidence. Recommended for next stage.`
+      } else if (status === 'REJECTED') {
+        text = `Bidder failed ${failCount} criteria and cannot proceed.`
+      } else {
+        text = `Bidder passed ${passCount} criteria but requires manual verification on ${reviewCount} criteria.`
+      }
+      doc.setFont('helvetica', 'italic')
+      doc.text(text, 14, currentY)
+      currentY += 8
+      
+      doc.autoTable({
+        startY: currentY,
+        head: [['Criterion', 'Verdict', 'Extracted Value', 'Explanation']],
+        body: tableData,
+        theme: 'grid',
+        headStyles: { fillColor: [40, 40, 40] },
+        styles: { fontSize: 8, cellPadding: 3 },
+        columnStyles: {
+          0: { cellWidth: 35 },
+          1: { cellWidth: 20 },
+          2: { cellWidth: 35 },
+          3: { cellWidth: 'auto' }
+        }
+      })
+      
+      currentY = doc.lastAutoTable.finalY + 20
+    })
+    
+    doc.save('Tender_Evaluation_Report.pdf')
+  }
+
   return (
     <div>
 
       {/* Header */}
-      <div className="mb-8">
-        <span className="text-xs font-mono text-amber-500 tracking-[0.3em] block mb-3">STAGE 3</span>
-        <h2 className="font-syne font-bold text-2xl md:text-3xl text-noir-50 tracking-tight mb-2">
-          Bidder Comparison Matrix
-        </h2>
-        <p className="text-noir-400 font-newsreader">
-          Color-coded evaluation grid — click any cell for full confidence breakdown.
-        </p>
+      <div className="flex justify-between items-start mb-8">
+        <div>
+          <span className="text-xs font-mono text-amber-500 tracking-[0.3em] block mb-3">STAGE 3</span>
+          <h2 className="font-syne font-bold text-2xl md:text-3xl text-noir-50 tracking-tight mb-2">
+            Bidder Comparison Matrix
+          </h2>
+          <p className="text-noir-400 font-newsreader">
+            Color-coded evaluation grid — click any cell for full confidence breakdown.
+          </p>
+        </div>
+        <div className="flex gap-3">
+          <button
+            onClick={() => setShowUpload(true)}
+            className="flex items-center gap-2 px-4 py-2 border border-noir-700 bg-noir-800 text-noir-200 text-xs font-mono hover:bg-noir-700 hover:text-noir-50 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            ADD BIDDER
+          </button>
+          <button
+            onClick={handleExportPDF}
+            className="flex items-center gap-2 px-4 py-2 border border-amber-500/50 bg-amber-500/10 text-amber-500 text-xs font-mono hover:bg-amber-500/20 transition-colors"
+          >
+            <Download className="w-4 h-4" />
+            EXPORT REPORT
+          </button>
+        </div>
       </div>
 
       {/* Legend */}
@@ -130,6 +255,16 @@ export default function BidderMatrix({ tenderId }) {
           </motion.div>
         ))}
       </div>
+
+      {showUpload && (
+        <BidderUploadModal
+          tenderId={tenderId}
+          onClose={() => setShowUpload(false)}
+          onSuccess={() => {
+            // UI refresh logic here
+          }}
+        />
+      )}
     </div>
   )
 }

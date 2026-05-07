@@ -12,3 +12,8 @@ anthropic
 keybert
 sentence-transformers
 faiss-cpu
+opencv-python
+numpy
+google-cloud-vision
+scikit-learn
+regex
