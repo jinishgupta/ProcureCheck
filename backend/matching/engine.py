@@ -52,14 +52,16 @@ BIDDER_INDEX_DIR = Path("data/bidder_indexes")
 
 # Confidence thresholds (from spec)
 REGEX_CONFIDENCE_GATE   = 0.90   # skip LLM if regex hits this
-VERDICT_PASS_FAIL_GATE  = 0.90   # below this → always REVIEW
+VERDICT_PASS_FAIL_GATE  = 0.75   # below this → always REVIEW (calibrated for weighted avg)
 RETRIEVAL_EVIDENCE_GATE = 0.50   # below this → "evidence not found" → REVIEW
 
-# Groq/Llama model for extraction and evaluation (similar to tender/index.py)
-GROQ_MODEL = "llama-3.3-70b-versatile"
+# Gemini model names — uses the same client pattern as the rest of the project
+GEMINI_EXTRACT_MODEL  = "gemini-2.0-flash"
+GEMINI_LOGPROB_MODEL  = "gemini-2.0-flash"
 
-# Embedding model — same as KeyBERT already loaded elsewhere in the project
-EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
+# Embedding model — read from settings to stay in sync with teammate's bidder ingestion
+from db.config import settings as _settings
+EMBED_MODEL_NAME = _settings.embedding_model
 
 # ── Singletons (loaded once at import time) ───────────────────────────────────
 
@@ -72,11 +74,10 @@ def _get_embedder() -> SentenceTransformer:
     return _embedder
 
 
-def _get_groq_client():
-    """Get Groq client for Llama model."""
-    from db.config import settings
-    from groq import Groq
-    return Groq(api_key=settings.groq_api_key)
+def _get_gemini_client():
+    """Use whichever key is configured, same pattern as eligibility.py."""
+    api_key = _settings.gemini_api_key_1 or _settings.gemini_api_key_2
+    return genai.Client(api_key=api_key)
 
 
 # ── Criterion type → pipeline type ───────────────────────────────────────────
@@ -222,19 +223,9 @@ def _regex_extract_numeric(text: str) -> tuple[Optional[str], Optional[float], f
 
     candidates = []
     for num_str, unit in matches:
-        # Skip empty strings
-        if not num_str or not num_str.strip():
-            continue
-        try:
-            val = float(num_str.replace(",", ""))
-            canonical = _to_inr(val, unit)
-            candidates.append((canonical, f"{num_str} {unit}"))
-        except ValueError:
-            # Skip invalid numbers
-            continue
-
-    if not candidates:
-        return None, None, 0.0
+        val = float(num_str.replace(",", ""))
+        canonical = _to_inr(val, unit)
+        candidates.append((canonical, f"{num_str} {unit}"))
 
     best_canonical, best_raw = max(candidates, key=lambda c: c[0])
     conf = 0.95 if len(matches) == 1 else 0.90
@@ -286,26 +277,21 @@ _EXTRACT_SYSTEM = (
 def _llm_extract(field: str, pipeline_type: str, page_text: str) -> tuple[Optional[str], Optional[float | str], float]:
     """Returns (raw, canonical, confidence)."""
     prompt = (
-        f"{_EXTRACT_SYSTEM}\n\n"
         f"Field to extract: {field} (type: {pipeline_type})\n\n"
         f"Document excerpt (first 3000 chars):\n{page_text[:3000]}\n\n"
-        "Return ONLY raw JSON. Example: {{\"value\": \"50 lakh\", \"unit\": \"lakh\", \"confidence\": 0.82}}"
+        "Return JSON only. Example: {\"value\": \"50 lakh\", \"unit\": \"lakh\", \"confidence\": 0.82}"
     )
-    
+    client = _get_gemini_client()
     try:
-        client = _get_groq_client()
-        response = client.chat.completions.create(
-            model=GROQ_MODEL,
-            max_tokens=150,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+        resp = client.models.generate_content(
+            model=GEMINI_EXTRACT_MODEL,
+            contents=prompt,
+            config={
+                "system_instruction": _EXTRACT_SYSTEM,
+                "max_output_tokens": 150,
+            },
         )
-        
-        raw_text = response.choices[0].message.content.strip()
-        # Remove markdown code blocks if present
-        raw_text = re.sub(r"```(?:json)?|```", "", raw_text).strip()
-        
+        raw_text = re.sub(r"```(?:json)?|```", "", resp.text or "").strip()
         data = json.loads(raw_text)
         value = data.get("value")
         unit  = data.get("unit") or ""
@@ -327,12 +313,7 @@ def _llm_extract(field: str, pipeline_type: str, page_text: str) -> tuple[Option
         return str(value), str(value), conf
 
     except Exception as e:
-        error_msg = str(e)
-        # Check if it's a rate limit error
-        if "429" in error_msg or "rate_limit" in error_msg.lower():
-            print(f"  [LLM extract] ⚠️  Rate limit for {field[:60]}... - Skipping LLM extraction")
-        else:
-            print(f"  [LLM extract error] {field}: {e}")
+        print(f"  [LLM extract error] {field}: {e}")
         return None, None, 0.0
 
 
@@ -372,10 +353,11 @@ def _meets_threshold(canonical, pipeline_type: str, requirement: str) -> bool:
 
 def _logprob_score(field: str, requirement: str, extracted: str, page_text: str) -> float:
     """
-    Ask Groq/Llama to assess H1 vs H2 and return a confidence score.
-    Falls back to 0.80 if the API is unavailable or rate limited.
+    Ask Gemini to assess H1 vs H2 and return P(H1)/(P(H1)+P(H2)).
+    Falls back to 0.80 if the logprob API is unavailable.
     """
-    
+    client = _get_gemini_client()
+
     def _score_hypothesis(claim: str) -> float:
         prompt = (
             f"Criterion: {field}\n"
@@ -386,32 +368,24 @@ def _logprob_score(field: str, requirement: str, extracted: str, page_text: str)
             "Reply with a single word: TRUE or FALSE"
         )
         try:
-            client = _get_groq_client()
-            response = client.chat.completions.create(
-                model=GROQ_MODEL,
-                max_tokens=5,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
+            resp = client.models.generate_content(
+                model=GEMINI_LOGPROB_MODEL,
+                contents=prompt,
+                config={"max_output_tokens": 5},
             )
-            text = response.choices[0].message.content.strip().upper()
-            # TRUE→high confidence, FALSE→low confidence
-            return 0.90 if text.startswith("TRUE") else 0.20
-        except Exception as e:
-            error_msg = str(e)
-            if "429" in error_msg or "rate_limit" in error_msg.lower():
-                # Rate limit - return neutral score
-                return 0.80
+            text = (resp.text or "").strip().upper()
+            # Gemini 2.0 Flash doesn't always expose logprobs via REST.
+            # Use the text response as a proxy: TRUE→high, FALSE→low.
+            # Use 0.10 (not 0.20) so a definitive FALSE drives confidence
+            # low enough to separate FAIL from REVIEW correctly.
+            return 0.90 if text.startswith("TRUE") else 0.10
+        except Exception:
             return 0.80
 
-    try:
-        p_h1 = _score_hypothesis(f"The bidder meets the requirement: {requirement}")
-        p_h2 = _score_hypothesis(f"The bidder does NOT meet the requirement: {requirement}")
-        total = p_h1 + p_h2
-        return (p_h1 / total) if total > 0 else 0.5
-    except Exception:
-        # If any error, return neutral score
-        return 0.80
+    p_h1 = _score_hypothesis(f"The bidder meets the requirement: {requirement}")
+    p_h2 = _score_hypothesis(f"The bidder does NOT meet the requirement: {requirement}")
+    total = p_h1 + p_h2
+    return (p_h1 / total) if total > 0 else 0.5
 
 
 # ── Composite confidence & verdict ────────────────────────────────────────────
@@ -425,7 +399,16 @@ def _compute_verdict(
     pipeline_type: str,
 ) -> tuple[str, float]:
     """Returns (verdict_string, final_confidence)."""
-    final = extraction_conf * ocr_conf * retrieval_score * logprob_score
+    # Weighted average (not product) — product of four 0–1 values can never
+    # reach the 0.90 gate even when every individual signal is strong.
+    # Weights: logprob matters most (does it actually meet the requirement?),
+    # extraction next, then retrieval, OCR last (usually high and stable).
+    final = (
+        0.40 * logprob_score +
+        0.30 * extraction_conf +
+        0.20 * retrieval_score +
+        0.10 * ocr_conf
+    )
     final = max(0.0, min(1.0, final))
 
     # Fuzzy criteria always go to REVIEW — humans must judge "similar work"
@@ -673,18 +656,13 @@ def run_evaluation_for_bidder(
 
     Called by the /api/matching/run/{tender_id} endpoint.
     """
-    print(f"\n{'─'*60}")
-    print(f"[Matching Engine] Evaluating bidder: {bidder_name} ({bidder_id})")
-    print(f"[Matching Engine] Criteria count: {len(criteria)}")
-    print(f"{'─'*60}")
+    print(f"\n[Engine] Evaluating bidder: {bidder_name} ({bidder_id})")
 
     # Load FAISS index and pages that your teammate produced
     try:
-        print(f"[Matching Engine] Loading FAISS index for bidder: {bidder_id}")
         index, pages = _load_bidder_index(bidder_id)
-        print(f"[Matching Engine] ✅ Loaded {len(pages)} pages from index")
     except FileNotFoundError as e:
-        print(f"[Matching Engine] ❌ Skip - {e}")
+        print(f"  [Skip] {e}")
         return {
             "bidder_id":   bidder_id,
             "bidder_name": bidder_name,
@@ -695,15 +673,14 @@ def run_evaluation_for_bidder(
     summary = {"PASS": 0, "FAIL": 0, "REVIEW": 0}
     results = []
 
-    for idx, criterion in enumerate(criteria, 1):
-        print(f"[Matching Engine] [{idx}/{len(criteria)}] Evaluating: {criterion['field'][:60]}...")
+    for criterion in criteria:
+        print(f"  [Criterion] {criterion['field']}")
         result = _evaluate_one(criterion, bidder_id, index, pages)
         results.append(result)
         summary[result["verdict"]] += 1
-        print(f"[Matching Engine]   → {result['verdict']} (confidence={result['confidence']:.2%})")
+        print(f"    → {result['verdict']} (conf={result['confidence']:.2%})")
 
     # Write everything to DB in one transaction
-    print(f"[Matching Engine] Saving {len(results)} evaluations to database...")
     with Database.get_cursor() as cursor:
         for result in results:
             _save_evaluation(result, cursor)
@@ -715,8 +692,7 @@ def run_evaluation_for_bidder(
             WHERE id = %s AND status NOT IN ('evaluation_complete', 'completed')
         """, (datetime.utcnow(), tender_id))
 
-    print(f"[Matching Engine] ✅ Complete - PASS={summary['PASS']} FAIL={summary['FAIL']} REVIEW={summary['REVIEW']}")
-    print(f"{'─'*60}\n")
+    print(f"  [Done] PASS={summary['PASS']} FAIL={summary['FAIL']} REVIEW={summary['REVIEW']}")
     return {"bidder_id": bidder_id, "bidder_name": bidder_name, **summary}
 
 
@@ -726,9 +702,9 @@ def run_evaluation_for_tender(tender_id: str) -> dict:
     Called once by the /api/matching/run/{tender_id} endpoint.
     Returns a full summary across all bidders.
     """
-    print(f"\n{'='*80}")
-    print(f"[Matching Engine] Starting evaluation for tender: {tender_id}")
-    print(f"{'='*80}\n")
+    print(f"\n{'='*60}")
+    print(f"[Engine] Starting evaluation for tender {tender_id}")
+    print(f"{'='*60}")
 
     with Database.get_cursor() as cursor:
         # Load criteria
@@ -740,56 +716,34 @@ def run_evaluation_for_tender(tender_id: str) -> dict:
         bidders = [dict(row) for row in cursor.fetchall()]
 
     if not criteria:
-        print("[Matching Engine] ❌ No criteria found for this tender")
         return {"error": "No criteria found for this tender. Run the tender pipeline first."}
     if not bidders:
-        print("[Matching Engine] ❌ No bidders found for this tender")
         return {"error": "No bidders found for this tender."}
 
-    print(f"[Matching Engine] Found {len(criteria)} criteria and {len(bidders)} bidders")
-    print(f"[Matching Engine] Starting parallel evaluation (max 4 workers)...\n")
-
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    print(f"[Engine] {len(criteria)} criteria, {len(bidders)} bidders")
 
     all_summaries = []
     total = {"PASS": 0, "FAIL": 0, "REVIEW": 0}
 
-    def process_bidder(bidder):
-        return run_evaluation_for_bidder(
+    for bidder in bidders:
+        result = run_evaluation_for_bidder(
             tender_id=tender_id,
             bidder_id=bidder["id"],
             bidder_name=bidder["name"],
             criteria=criteria,
         )
-
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        future_to_bidder = {executor.submit(process_bidder, b): b for b in bidders}
-        for future in as_completed(future_to_bidder):
-            try:
-                result = future.result()
-                all_summaries.append(result)
-                for k in total:
-                    total[k] += result.get(k, 0)
-            except Exception as exc:
-                bidder = future_to_bidder[future]
-                print(f"[Matching Engine] ❌ Bidder {bidder['name']} generated an exception: {exc}")
-                import traceback
-                traceback.print_exc()
+        all_summaries.append(result)
+        for k in total:
+            total[k] += result.get(k, 0)
 
     # Mark tender as evaluation complete
-    print(f"\n[Matching Engine] Updating tender status to 'evaluation_complete'...")
     with Database.get_cursor() as cursor:
         cursor.execute("""
             UPDATE tenders SET status = 'evaluation_complete', updated_at = %s
             WHERE id = %s
         """, (datetime.utcnow(), tender_id))
 
-    print(f"\n{'='*80}")
-    print(f"[Matching Engine] ✅ EVALUATION COMPLETE")
-    print(f"[Matching Engine] Total Results: PASS={total['PASS']} FAIL={total['FAIL']} REVIEW={total['REVIEW']}")
-    print(f"[Matching Engine] Processed {len(bidders)} bidders against {len(criteria)} criteria")
-    print(f"{'='*80}\n")
-    
+    print(f"\n[Engine] Done. Total across all bidders: {total}")
     return {
         "tender_id":  tender_id,
         "criteria_count": len(criteria),
