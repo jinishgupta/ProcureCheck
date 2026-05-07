@@ -10,3 +10,4 @@ PyMuPDF
 google-genai
 keybert
 sentence-transformers
+faiss-cpu
