@@ -11,3 +11,4 @@ groq
 anthropic
 keybert
 sentence-transformers
+faiss-cpu
