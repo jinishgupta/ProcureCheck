@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from typing import Optional
 from db.models import (
     Evaluation, EvaluationCreate, EvaluationMatrixResponse,
@@ -13,26 +13,126 @@ import json
 router = APIRouter(tags=["evaluations"])
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW: Trigger the matching + evaluation pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/matching/run/{tender_id}")
+async def run_matching(tender_id: str, background_tasks: BackgroundTasks):
+    """
+    Trigger Stage 3 matching & evaluation for all bidders in a tender.
+
+    What this does:
+      1. Loads all criteria from the database for this tender
+      2. For each bidder, loads their FAISS index from disk
+         (produced by the bidder ingestion pipeline)
+      3. Runs retrieval → regex/LLM extraction → logprob scoring → verdict
+      4. Writes every result to the evaluations table
+      5. Auto-populates the review_queue for any REVIEW verdicts
+      6. Updates tender status to evaluation_in_progress / evaluation_complete
+
+    Runs in the background so the HTTP response returns immediately.
+    Poll GET /api/tenders/{tender_id} and check status field to know when done.
+
+    Prerequisites:
+      - Tender must have criteria (run tender upload first)
+      - Bidders must be registered and their FAISS indexes must exist at
+        data/bidder_indexes/{bidder_id}/faiss.index
+        data/bidder_indexes/{bidder_id}/pages.json
+    """
+    # Validate tender exists before handing off to background
+    try:
+        with Database.get_cursor() as cursor:
+            cursor.execute("SELECT id, status FROM tenders WHERE id = %s", (tender_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Tender not found")
+
+            cursor.execute("SELECT COUNT(*) as c FROM criteria WHERE tender_id = %s", (tender_id,))
+            criteria_count = cursor.fetchone()["c"]
+            if criteria_count == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No criteria found for this tender. Upload the tender PDF first."
+                )
+
+            cursor.execute("SELECT COUNT(*) as c FROM bidders WHERE tender_id = %s", (tender_id,))
+            bidder_count = cursor.fetchone()["c"]
+            if bidder_count == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No bidders found for this tender. Add bidders first."
+                )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Import here to avoid circular imports and slow startup
+    from matching.engine import run_evaluation_for_tender
+
+    # Run in background — evaluation can take minutes for 30+ bidders
+    background_tasks.add_task(run_evaluation_for_tender, tender_id)
+
+    return {
+        "message": "Evaluation started in background",
+        "tender_id": tender_id,
+        "criteria_count": criteria_count,
+        "bidder_count": bidder_count,
+        "poll": f"GET /api/tenders/{tender_id} — watch the 'status' field",
+    }
+
+
+@router.post("/matching/run/{tender_id}/sync")
+async def run_matching_sync(tender_id: str):
+    """
+    Same as /matching/run/{tender_id} but waits for completion and
+    returns the full summary. Use this for small tenders or testing.
+    For production with 30+ bidders, use the async version above.
+    """
+    try:
+        with Database.get_cursor() as cursor:
+            cursor.execute("SELECT id FROM tenders WHERE id = %s", (tender_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Tender not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    from matching.engine import run_evaluation_for_tender
+    try:
+        result = run_evaluation_for_tender(tender_id)
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Existing routes (unchanged)
+# ─────────────────────────────────────────────────────────────────────────────
+
 @router.get("/evaluations/matrix/{tender_id}", response_model=EvaluationMatrixResponse)
 async def get_evaluation_matrix(tender_id: str):
     """Get evaluation matrix for a tender"""
     try:
         with Database.get_cursor() as cursor:
-            # Get evaluations
             cursor.execute("SELECT * FROM evaluations WHERE tender_id = %s", (tender_id,))
             eval_rows = cursor.fetchall()
             evaluations = [Evaluation(**dict(row)) for row in eval_rows]
-            
-            # Get bidders
+
             cursor.execute("SELECT * FROM bidders WHERE tender_id = %s", (tender_id,))
             bidder_rows = cursor.fetchall()
             bidders = [Bidder(**dict(row)) for row in bidder_rows]
-            
-            # Get criteria
+
             cursor.execute("SELECT * FROM criteria WHERE tender_id = %s", (tender_id,))
             criteria_rows = cursor.fetchall()
             criteria = [Criterion(**dict(row)) for row in criteria_rows]
-            
+
             return EvaluationMatrixResponse(
                 evaluations=evaluations,
                 bidders=bidders,
@@ -49,10 +149,9 @@ async def create_evaluation(evaluation: EvaluationCreate):
         with Database.get_cursor() as cursor:
             evaluation_id = str(uuid.uuid4())
             now = datetime.utcnow()
-            
-            # Convert signals to JSON
+
             signals_json = json.dumps(evaluation.signals.model_dump())
-            
+
             cursor.execute("""
                 INSERT INTO evaluations (
                     id, tender_id, bidder_id, criterion_id, verdict, confidence,
@@ -66,10 +165,9 @@ async def create_evaluation(evaluation: EvaluationCreate):
                 evaluation.extracted_value, evaluation.method.value, evaluation.source_page,
                 signals_json, evaluation.explanation, now
             ))
-            
+
             row = cursor.fetchone()
-            
-            # If confidence < 0.9, add to review queue
+
             if evaluation.confidence < 0.9:
                 urgency = "high" if evaluation.confidence < 0.7 else "medium"
                 cursor.execute("""
@@ -82,7 +180,7 @@ async def create_evaluation(evaluation: EvaluationCreate):
                     urgency, f"Confidence {evaluation.confidence:.2%} below threshold",
                     "pending", now
                 ))
-            
+
             return Evaluation(**dict(row))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -105,10 +203,9 @@ async def get_review_queue(tender_id: str, status: Optional[str] = "pending"):
                     WHERE tender_id = %s
                     ORDER BY created_at DESC
                 """, (tender_id,))
-            
+
             rows = cursor.fetchall()
             items = [ReviewItem(**dict(row)) for row in rows]
-            
             return ReviewQueueResponse(items=items, total=len(items))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -120,21 +217,19 @@ async def update_review_item(review_id: str, status: str, officer: str, reason: 
     try:
         with Database.get_cursor() as cursor:
             now = datetime.utcnow()
-            
+
             cursor.execute("""
                 UPDATE review_queue
                 SET status = %s, reviewed_by = %s, reviewed_at = %s
                 WHERE id = %s
                 RETURNING *
             """, (status, officer, now, review_id))
-            
+
             row = cursor.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Review item not found")
-            
+
             review_data = dict(row)
-            
-            # Create audit log
             action = "REVIEW_CONFIRMED" if status == "confirmed" else "REVIEW_OVERRIDE"
             cursor.execute("""
                 INSERT INTO audit_logs (id, tender_id, action, officer, detail, version, timestamp)
@@ -143,7 +238,7 @@ async def update_review_item(review_id: str, status: str, officer: str, reason: 
                 str(uuid.uuid4()), review_data["tender_id"], action, officer,
                 reason or f"Review item {status}", "1.0", now
             ))
-            
+
             return {"message": "Review item updated successfully"}
     except HTTPException:
         raise
@@ -168,10 +263,9 @@ async def get_audit_trail(tender_id: str, action: Optional[str] = None):
                     WHERE tender_id = %s
                     ORDER BY timestamp DESC
                 """, (tender_id,))
-            
+
             rows = cursor.fetchall()
             logs = [AuditLog(**dict(row)) for row in rows]
-            
             return AuditTrailResponse(logs=logs, total=len(logs))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -182,44 +276,33 @@ async def get_dashboard_stats():
     """Get dashboard statistics"""
     try:
         with Database.get_cursor() as cursor:
-            # Count active tenders
             cursor.execute("""
                 SELECT COUNT(*) as count FROM tenders
                 WHERE status IN ('awaiting_bids', 'evaluation_in_progress', 'evaluation_complete')
             """)
-            active_tenders = cursor.fetchone()['count']
-            
-            # Count pending reviews
-            cursor.execute("""
-                SELECT COUNT(*) as count FROM review_queue
-                WHERE status = 'pending'
-            """)
-            pending_reviews = cursor.fetchone()['count']
-            
-            # Count total bidders
+            active_tenders = cursor.fetchone()["count"]
+
+            cursor.execute("SELECT COUNT(*) as count FROM review_queue WHERE status = 'pending'")
+            pending_reviews = cursor.fetchone()["count"]
+
             cursor.execute("SELECT COUNT(*) as count FROM bidders")
-            bidders = cursor.fetchone()['count']
-            
-            # Calculate compliance rate
-            cursor.execute("""
-                SELECT verdict, COUNT(*) as count
-                FROM evaluations
-                GROUP BY verdict
-            """)
+            bidders = cursor.fetchone()["count"]
+
+            cursor.execute("SELECT verdict, COUNT(*) as count FROM evaluations GROUP BY verdict")
             verdict_rows = cursor.fetchall()
-            
+
             if verdict_rows:
-                pass_count = sum(row['count'] for row in verdict_rows if row['verdict'] == 'PASS')
-                total_count = sum(row['count'] for row in verdict_rows)
+                pass_count  = sum(r["count"] for r in verdict_rows if r["verdict"] == "PASS")
+                total_count = sum(r["count"] for r in verdict_rows)
                 compliance_rate = int((pass_count / total_count) * 100) if total_count > 0 else 0
             else:
                 compliance_rate = 0
-            
+
             return DashboardStats(
                 active_tenders=active_tenders,
                 pending_reviews=pending_reviews,
                 bidders_evaluated=bidders,
-                compliance_rate=compliance_rate
+                compliance_rate=compliance_rate,
             )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
