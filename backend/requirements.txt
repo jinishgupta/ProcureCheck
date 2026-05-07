@@ -18,3 +18,4 @@ numpy
 google-cloud-vision
 scikit-learn
 regex
+gunicorn
