@@ -16,40 +16,40 @@ const pageVariants = {
 const bentoItems = [
   {
     icon: <ScanLine className="w-5 h-5" />,
-    title: 'Intelligent OCR Pipeline',
-    description: 'Native PDFs via PyMuPDF. Scanned pages and photographs routed through Cloud Vision with de-skew, contrast enhancement, and per-page confidence scores.',
+    title: 'Hybrid OCR Pipeline',
+    description: 'Direct text extraction via PyMuPDF for native PDFs. Scanned pages are routed through Google Cloud Vision with de-skew and contrast enhancement.',
   },
   {
     icon: <Brain className="w-5 h-5" />,
-    title: 'Two-Stage LLM Extraction',
-    description: 'Gemini Flash identifies eligibility sections from ~300 tokens. Gemini Pro extracts structured criteria from full section text. Cross-references trigger gap-fill calls.',
+    title: 'Regex-First Extraction',
+    description: 'High-speed regex patterns identify core values instantly. Complex or ambiguous requirements fallback to Llama 3.3 (via Groq) for semantic reasoning.',
   },
   {
     icon: <Target className="w-5 h-5" />,
-    title: 'Vector-Indexed Matching',
-    description: 'Per-bidder FAISS indices ensure zero cross-contamination. Type-specific queries retrieve top-3 relevant pages. Regex-first strategy minimizes LLM cost.',
+    title: 'Isolated Vector Search',
+    description: 'Per-bidder FAISS indices built with all-MiniLM-L6-v2. Isolated indices ensure zero cross-contamination and precise context retrieval.',
   },
   {
     icon: <Fingerprint className="w-5 h-5" />,
-    title: '4-Signal Confidence Scoring',
-    description: 'Extraction × OCR × Retrieval × LLM logprob. Calibrated probabilities from Gemini logprob API. No path to silent disqualification — low confidence triggers REVIEW.',
+    title: 'Weighted Signal Scoring',
+    description: 'Verdicts are calculated using a weighted composite of Extraction × OCR × Retrieval × Reasoning signals. Low confidence triggers manual review.',
   },
   {
-    icon: <FileCheck className="w-5 h-5" />,
-    title: 'Cross-Document Validation',
-    description: 'Company name consistency, PAN matching, turnover cross-verification (±5%), work order vs completion certificate values (±2%). Any mismatch triggers human review.',
+    icon: <Database className="w-5 h-5" />,
+    title: 'Parallel Ingestion',
+    description: 'Multi-threaded document processing using ThreadPoolExecutor. Rapidly ingest and index dozens of bidder documents simultaneously.',
   },
   {
     icon: <ClipboardCheck className="w-5 h-5" />,
     title: 'Complete Audit Trail',
-    description: 'Immutable PostgreSQL logs. Full LLM prompt/response capture. SHA-256 document fingerprinting. Version tracking for corrigenda. Exportable PDF reports.',
+    description: 'Immutable PostgreSQL logs track every AI verdict and human override. SHA-256 fingerprinting ensures document integrity and version control.',
   },
 ]
 
 const techStack = [
-  { name: 'PyMuPDF', role: 'Native PDF' },
+  { name: 'PyMuPDF', role: 'Doc Engine' },
   { name: 'Cloud Vision', role: 'OCR' },
-  { name: 'Gemini', role: 'LLM' },
+  { name: 'Groq / Llama', role: 'LLM' },
   { name: 'FAISS', role: 'Vectors' },
   { name: 'FastAPI', role: 'Backend' },
   { name: 'React', role: 'Frontend' },
