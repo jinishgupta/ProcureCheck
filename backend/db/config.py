@@ -16,9 +16,12 @@ class Settings(BaseSettings):
     # Environment
     environment: str = "development"
     
-    # Gemini API Keys
+    # API Keys
     gemini_api_key_1: str = ""
     gemini_api_key_2: str = ""
+    groq_api_key: str = ""
+    anthropic_api_key: str = ""
+    claude_api_key: str = ""  # Alias for anthropic_api_key
 
     # Embedding — must match the model your teammate used to build the FAISS index
     embedding_model: str = "all-MiniLM-L6-v2"

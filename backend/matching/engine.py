@@ -38,9 +38,8 @@ import numpy as np
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-
 from sentence_transformers import SentenceTransformer
-from google import genai
+
 
 from db.database import Database
 from db.models import CriterionType, Verdict, ExtractionMethod
@@ -52,16 +51,14 @@ BIDDER_INDEX_DIR = Path("data/bidder_indexes")
 
 # Confidence thresholds (from spec)
 REGEX_CONFIDENCE_GATE   = 0.90   # skip LLM if regex hits this
-VERDICT_PASS_FAIL_GATE  = 0.75   # below this → always REVIEW (calibrated for weighted avg)
+VERDICT_PASS_FAIL_GATE  = 0.70   # below this → always REVIEW (lowered to get more PASS/FAIL)
 RETRIEVAL_EVIDENCE_GATE = 0.50   # below this → "evidence not found" → REVIEW
 
-# Gemini model names — uses the same client pattern as the rest of the project
-GEMINI_EXTRACT_MODEL  = "gemini-2.0-flash"
-GEMINI_LOGPROB_MODEL  = "gemini-2.0-flash"
+# Groq/Llama model for extraction and evaluation (free tier, better limits than Gemini)
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
-# Embedding model — read from settings to stay in sync with teammate's bidder ingestion
-from db.config import settings as _settings
-EMBED_MODEL_NAME = _settings.embedding_model
+# Embedding model — same as KeyBERT already loaded elsewhere in the project
+EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
 
 # ── Singletons (loaded once at import time) ───────────────────────────────────
 
@@ -74,10 +71,11 @@ def _get_embedder() -> SentenceTransformer:
     return _embedder
 
 
-def _get_gemini_client():
-    """Use whichever key is configured, same pattern as eligibility.py."""
-    api_key = _settings.gemini_api_key_1 or _settings.gemini_api_key_2
-    return genai.Client(api_key=api_key)
+def _get_groq_client():
+    """Get Groq client for Llama model (better free tier than Gemini)."""
+    from db.config import settings
+    from groq import Groq
+    return Groq(api_key=settings.groq_api_key)
 
 
 # ── Criterion type → pipeline type ───────────────────────────────────────────
@@ -223,9 +221,19 @@ def _regex_extract_numeric(text: str) -> tuple[Optional[str], Optional[float], f
 
     candidates = []
     for num_str, unit in matches:
-        val = float(num_str.replace(",", ""))
-        canonical = _to_inr(val, unit)
-        candidates.append((canonical, f"{num_str} {unit}"))
+        # Skip empty strings
+        if not num_str or not num_str.strip():
+            continue
+        try:
+            val = float(num_str.replace(",", ""))
+            canonical = _to_inr(val, unit)
+            candidates.append((canonical, f"{num_str} {unit}"))
+        except ValueError:
+            # Skip invalid numbers
+            continue
+
+    if not candidates:
+        return None, None, 0.0
 
     best_canonical, best_raw = max(candidates, key=lambda c: c[0])
     conf = 0.95 if len(matches) == 1 else 0.90
@@ -277,21 +285,24 @@ _EXTRACT_SYSTEM = (
 def _llm_extract(field: str, pipeline_type: str, page_text: str) -> tuple[Optional[str], Optional[float | str], float]:
     """Returns (raw, canonical, confidence)."""
     prompt = (
+        f"{_EXTRACT_SYSTEM}\n\n"
         f"Field to extract: {field} (type: {pipeline_type})\n\n"
         f"Document excerpt (first 3000 chars):\n{page_text[:3000]}\n\n"
-        "Return JSON only. Example: {\"value\": \"50 lakh\", \"unit\": \"lakh\", \"confidence\": 0.82}"
+        "Return JSON only. Example: {{\"value\": \"50 lakh\", \"unit\": \"lakh\", \"confidence\": 0.82}}"
     )
-    client = _get_gemini_client()
+    
     try:
-        resp = client.models.generate_content(
-            model=GEMINI_EXTRACT_MODEL,
-            contents=prompt,
-            config={
-                "system_instruction": _EXTRACT_SYSTEM,
-                "max_output_tokens": 150,
-            },
+        client = _get_groq_client()
+        resp = client.chat.completions.create(
+            model=GROQ_MODEL,
+            max_tokens=150,
+            messages=[{"role": "system", "content": _EXTRACT_SYSTEM}, {"role": "user", "content": prompt}]
         )
-        raw_text = re.sub(r"```(?:json)?|```", "", resp.text or "").strip()
+        
+        raw_text = resp.choices[0].message.content.strip()
+        # Remove markdown code blocks if present
+        raw_text = re.sub(r"```(?:json)?|```", "", raw_text).strip()
+        
         data = json.loads(raw_text)
         value = data.get("value")
         unit  = data.get("unit") or ""
@@ -353,10 +364,10 @@ def _meets_threshold(canonical, pipeline_type: str, requirement: str) -> bool:
 
 def _logprob_score(field: str, requirement: str, extracted: str, page_text: str) -> float:
     """
-    Ask Gemini to assess H1 vs H2 and return P(H1)/(P(H1)+P(H2)).
-    Falls back to 0.80 if the logprob API is unavailable.
+    Ask Groq/Llama to assess H1 vs H2 and return P(H1)/(P(H1)+P(H2)).
+    Falls back to 0.75 if the API is unavailable.
     """
-    client = _get_gemini_client()
+    client = _get_groq_client()
 
     def _score_hypothesis(claim: str) -> float:
         prompt = (
@@ -368,24 +379,24 @@ def _logprob_score(field: str, requirement: str, extracted: str, page_text: str)
             "Reply with a single word: TRUE or FALSE"
         )
         try:
-            resp = client.models.generate_content(
-                model=GEMINI_LOGPROB_MODEL,
-                contents=prompt,
-                config={"max_output_tokens": 5},
+            resp = client.chat.completions.create(
+                model=GROQ_MODEL,
+                max_tokens=5,
+                messages=[{"role": "user", "content": prompt}]
             )
-            text = (resp.text or "").strip().upper()
-            # Gemini 2.0 Flash doesn't always expose logprobs via REST.
-            # Use the text response as a proxy: TRUE→high, FALSE→low.
-            # Use 0.10 (not 0.20) so a definitive FALSE drives confidence
-            # low enough to separate FAIL from REVIEW correctly.
+            text = resp.choices[0].message.content.strip().upper()
+            # TRUE→high confidence, FALSE→low confidence
             return 0.90 if text.startswith("TRUE") else 0.10
         except Exception:
-            return 0.80
+            return 0.75
 
-    p_h1 = _score_hypothesis(f"The bidder meets the requirement: {requirement}")
-    p_h2 = _score_hypothesis(f"The bidder does NOT meet the requirement: {requirement}")
-    total = p_h1 + p_h2
-    return (p_h1 / total) if total > 0 else 0.5
+    try:
+        p_h1 = _score_hypothesis(f"The bidder meets the requirement: {requirement}")
+        p_h2 = _score_hypothesis(f"The bidder does NOT meet the requirement: {requirement}")
+        total = p_h1 + p_h2
+        return (p_h1 / total) if total > 0 else 0.75
+    except Exception:
+        return 0.75
 
 
 # ── Composite confidence & verdict ────────────────────────────────────────────

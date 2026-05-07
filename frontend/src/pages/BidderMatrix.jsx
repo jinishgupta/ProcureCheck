@@ -194,6 +194,23 @@ export default function BidderMatrix({ tenderId }) {
             ADD BIDDER
           </button>
           <button
+            onClick={handleRunEvaluation}
+            disabled={evaluating || bidders.length === 0}
+            className="flex items-center gap-2 px-4 py-2 border border-jade-700/50 bg-jade-900/20 text-jade-400 text-xs font-mono hover:bg-jade-900/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {evaluating ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                EVALUATING...
+              </>
+            ) : (
+              <>
+                <PlayCircle className="w-4 h-4" />
+                RE-RUN EVALUATION
+              </>
+            )}
+          </button>
+          <button
             onClick={handleExportPDF}
             disabled={bidders.length === 0 || Object.keys(matrixData).length === 0}
             className="flex items-center gap-2 px-4 py-2 border border-amber-500/50 bg-amber-500/10 text-amber-500 text-xs font-mono hover:bg-amber-500/20 transition-colors disabled:opacity-50"
