@@ -33,12 +33,10 @@ import re
 import json
 import math
 import uuid
-import faiss
 import numpy as np
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
-from sentence_transformers import SentenceTransformer
+from typing import Optional, Any
 
 
 from db.database import Database
@@ -60,15 +58,22 @@ GROQ_MODEL = "llama-3.3-70b-versatile"
 # Embedding model — same as KeyBERT already loaded elsewhere in the project
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
 
-# ── Singletons (loaded once at import time) ───────────────────────────────────
+# Lazy singletons — deferred to avoid importing PyTorch/faiss at startup
+# (Render's port-scan would time out before uvicorn could bind otherwise).
 
-_embedder: Optional[SentenceTransformer] = None
+_embedder: Optional[Any] = None
 
-def _get_embedder() -> SentenceTransformer:
+def _get_embedder():
     global _embedder
     if _embedder is None:
+        from sentence_transformers import SentenceTransformer  # noqa: deferred
         _embedder = SentenceTransformer(EMBED_MODEL_NAME)
     return _embedder
+
+def _get_faiss():
+    """Return the faiss module, importing it lazily."""
+    import faiss  # noqa: deferred
+    return faiss
 
 
 def _get_groq_client():
@@ -118,7 +123,7 @@ def _build_retrieval_query(field: str, pipeline_type: str) -> str:
 
 # ── Load bidder index ─────────────────────────────────────────────────────────
 
-def _load_bidder_index(bidder_id: str) -> tuple[faiss.IndexFlatIP, list[dict]]:
+def _load_bidder_index(bidder_id: str) -> tuple:
     """
     Load the FAISS index and pages metadata your teammate produced.
     Raises FileNotFoundError with a helpful message if missing.
@@ -140,7 +145,7 @@ def _load_bidder_index(bidder_id: str) -> tuple[faiss.IndexFlatIP, list[dict]]:
             f"Expected: {pages_path}."
         )
 
-    index = faiss.read_index(str(index_path))
+    index = _get_faiss().read_index(str(index_path))
     with open(pages_path, encoding="utf-8") as f:
         pages = json.load(f)
 
@@ -151,7 +156,7 @@ def _load_bidder_index(bidder_id: str) -> tuple[faiss.IndexFlatIP, list[dict]]:
 
 def _retrieve_pages(
     query: str,
-    index: faiss.IndexFlatIP,
+    index: Any,
     pages: list[dict],
     top_k: int = 3,
 ) -> list[dict]:
@@ -439,7 +444,7 @@ def _compute_verdict(
 def _evaluate_one(
     criterion: dict,          # row from criteria table
     bidder_id: str,
-    index: faiss.IndexFlatIP,
+    index: Any,
     pages: list[dict],
 ) -> dict:
     """

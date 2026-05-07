@@ -89,10 +89,10 @@ async def create_bidder(bidder: BidderCreate):
 
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
-import faiss
 
 def process_bidder_documents(file_paths: list[str], tender_id: str, bidder_id: str):
     """Process bidder documents - matching pipeline should be triggered separately after all bidders are uploaded"""
+    import faiss  # noqa: deferred — heavy import, loaded only when processing starts
     try:
         print(f"\n{'='*60}")
         print(f"[Bidder Pipeline] Starting processing for bidder: {bidder_id}")

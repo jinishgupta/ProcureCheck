@@ -4,7 +4,6 @@ import os
 import re
 import time
 import anthropic
-from keybert import KeyBERT
 from dotenv import load_dotenv
 from groq import Groq
 
@@ -12,8 +11,16 @@ load_dotenv()
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-# load once at startup
-kw_model = KeyBERT(model="all-MiniLM-L6-v2")
+# Lazy-loaded — do NOT import at module level (PyTorch takes too long and causes
+# Render's port-scan to time out before uvicorn can bind to the port).
+_kw_model = None
+
+def _get_kw_model():
+    global _kw_model
+    if _kw_model is None:
+        from keybert import KeyBERT  # noqa: deferred import
+        _kw_model = KeyBERT(model="all-MiniLM-L6-v2")
+    return _kw_model
 
 CHUNK_SIZE = 2500
 CHUNK_DELAY = 2
@@ -267,7 +274,7 @@ def generate_node_summary(node: dict, pages_cache: dict) -> str:
         return child_titles if child_titles else "No content"
 
     try:
-        keywords = kw_model.extract_keywords(
+        keywords = _get_kw_model().extract_keywords(
             clean[:1500],
             keyphrase_ngram_range=(1, 3),
             stop_words="english",
